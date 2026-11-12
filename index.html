@@ -125,11 +125,17 @@
     <!-- 2. Canvas สำหรับวาดเคอร์เซอร์ปลายนิ้วชี้ (สีน้ำเงิน + Glow + Dwell Ring) -->
     <canvas id="ar-canvas"></canvas>
 
+    <!-- ปุ่มขนาดเต็มหน้าจอ (Fullscreen) ลอยอยู่มุมบนขวามือสุด รองรับทุกหน้าจอ -->
+    <button id="btn-fullscreen-top" data-hud-action="fullscreen" onclick="toggleFullScreen()" class="ar-hud-target fixed top-3 right-3 sm:top-5 sm:right-5 z-50 glass-panel hover:bg-indigo-600/80 active:scale-95 transition px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-xl border border-indigo-400/50 shadow-xl flex items-center gap-1.5 text-indigo-200 font-bold text-xs sm:text-sm" title="สลับโหมดเต็มหน้าจอ">
+        <span id="fullscreen-btn-icon" class="text-base sm:text-lg">⛶</span>
+        <span id="fullscreen-btn-text" class="hidden sm:inline">เต็มจอ</span>
+    </button>
+
     <!-- 3. เลเยอร์ส่วนติดต่อผู้ใช้ (UI Layer) -->
     <div id="ui-layer" class="flex flex-col justify-between p-3 sm:p-6">
 
         <!-- ================= TOP BAR: คะแนน, เวลา, และปุ่มตั้งค่า ================= -->
-        <header id="hud-header" class="hidden w-full max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 sm:gap-4 z-30">
+        <header id="hud-header" class="hidden w-full max-w-7xl mx-auto pr-14 sm:pr-28 flex flex-wrap items-center justify-between gap-2 sm:gap-4 z-30">
             
             <!-- แผงคะแนนผู้เล่นที่ 1 (หรือเล่นคนเดียว) -->
             <div class="glass-panel px-4 py-2 sm:px-6 sm:py-3 rounded-2xl flex items-center gap-3 sm:gap-5 shadow-xl border-l-4 border-l-blue-400">
@@ -1125,6 +1131,8 @@
                             togglePauseGame();
                         } else if (hudAction === 'home') {
                             goToHomeScreen();
+                        } else if (hudAction === 'fullscreen') {
+                            toggleFullScreen();
                         } else if (selectedAnswer) {
                             handleAnswerSubmission(playerNum, selectedAnswer);
                         }
@@ -1135,6 +1143,57 @@
                 cursor.dwellProgress = 0;
             }
         }
+
+        /**
+         * ฟังก์ชันสลับโหมดขนาดเต็มหน้าจอ (Fullscreen API) มุมบนขวามือ
+         */
+        function toggleFullScreen() {
+            playSoundEffect('hover');
+            const docEl = document.documentElement;
+
+            const isFull = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+
+            if (!isFull) {
+                if (docEl.requestFullscreen) {
+                    docEl.requestFullscreen().catch((err) => {
+                        console.warn('Fullscreen request blocked or failed:', err);
+                    });
+                } else if (docEl.webkitRequestFullscreen) {
+                    docEl.webkitRequestFullscreen();
+                } else if (docEl.msRequestFullscreen) {
+                    docEl.msRequestFullscreen();
+                }
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen().catch((err) => {
+                        console.warn('Exit fullscreen failed:', err);
+                    });
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                } else if (document.msExitFullscreen) {
+                    document.msExitFullscreen();
+                }
+            }
+        }
+
+        function updateFullscreenButtonUI() {
+            const iconEl = document.getElementById('fullscreen-btn-icon');
+            const textEl = document.getElementById('fullscreen-btn-text');
+            if (!iconEl || !textEl) return;
+
+            const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+            if (isFull) {
+                iconEl.textContent = '🗗';
+                textEl.textContent = 'ย่อจอ';
+            } else {
+                iconEl.textContent = '⛶';
+                textEl.textContent = 'เต็มจอ';
+            }
+            resizeCanvas();
+        }
+
+        document.addEventListener('fullscreenchange', updateFullscreenButtonUI);
+        document.addEventListener('webkitfullscreenchange', updateFullscreenButtonUI);
 
         /**
          * 4. ระบบจัดการเกม การสุ่มคำถาม การตรวจคำตอบ และการจับเวลา
