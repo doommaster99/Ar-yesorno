@@ -553,7 +553,1061 @@
         </div>
     </div>
 
-    <!-- เชื่อมต่อไฟล์ JavaScript ภายนอก (app.js) -->
-    <script src="app.js"></script>
+    <!-- สคริปต์ระบบเกม AR Hand Tracking ฝังในไฟล์เดียวเพื่อให้รันได้ทุกสภาพแวดล้อม -->
+    <script>
+        /**
+         * ============================================================================
+         * สคริปต์หลักสำหรับเกม Yes or No - Quizesgame
+         * ควบคุมระบบ Hand Tracking (MediaPipe Hands), เสียง Web Audio API,
+         * การตั้งเวลาแข่งขัน, โหมดผู้เล่น 1-2 คน และการนำเข้าไฟล์ Excel
+         * ============================================================================
+         */
+
+        // 1. คลังข้อมูลคำถามเริ่มต้น (เรื่อง การปฏิรูปศาสนา)
+        const DEFAULT_QUESTIONS = [
+            {
+                question: "การปฏิรูปศาสนาเริ่มต้นขึ้นใน ค.ศ. 1517 เมื่อมาร์ติน ลูเทอร์ ประกาศ 95 ข้อ เพื่อคัดค้านการขายใบไถ่บาป",
+                answer: "ใช่",
+                explanation: "ลูเทอร์ประกาศ 95 ข้อ (95 Theses) ที่โบสถ์วิทเทนแบร์ก ประเทศเยอรมนี ใน ค.ศ. 1517 ถือเป็นจุดเริ่มต้นของการปฏิรูปศาสนา"
+            },
+            {
+                question: "ผู้จุดชนวนการปฏิรูปศาสนาเป็นชาวฝรั่งเศส",
+                answer: "ไม่",
+                explanation: "มาร์ติน ลูเทอร์ เป็นชาวเยอรมัน ส่วนฌอง คาลวิน เป็นชาวฝรั่งเศสและเป็นผู้นำปฏิรูปในรุ่นถัดมา"
+            },
+            {
+                question: "คำว่า \"โปรเตสแตนต์\" มีความหมายว่า \"ผู้ประท้วง\"",
+                answer: "ใช่",
+                explanation: "คำนี้มาจากเหตุการณ์ที่เจ้าผู้ครองแคว้นฝ่ายลูเทอร์ประท้วงมติของสภาสไปเออร์ ใน ค.ศ. 1529"
+            },
+            {
+                question: "การขายใบไถ่บาปของคริสตจักรมีจุดประสงค์สำคัญเพื่อหาเงินไปสร้างมหาวิหารเซนต์ปีเตอร์ที่กรุงโรม",
+                answer: "ใช่",
+                explanation: "พระสันตะปาปาลีโอที่ 10 ต้องการเงินสร้างมหาวิหารเซนต์ปีเตอร์ จึงสนับสนุนการขายใบไถ่บาป ซึ่งลูเทอร์มองว่าเป็นการหาผลประโยชน์จากศาสนา"
+            },
+            {
+                question: "นิกายแองกลิกันก่อตั้งโดยมาร์ติน ลูเทอร์",
+                answer: "ไม่",
+                explanation: "นิกายแองกลิกันเกิดจากพระเจ้าเฮนรีที่ 8 แห่งอังกฤษ ผ่านพระราชบัญญัติความเป็นใหญ่ ค.ศ. 1534 ส่วนลูเทอร์ตั้งนิกายลูเทอรัน"
+            }
+        ];
+
+        // State ของคลังคำถามและการสุ่ม
+        let questionBank = [...DEFAULT_QUESTIONS];
+        let remainingQuestions = [];
+        let currentQuestion = null;
+
+        // State ของเกม
+        let gameState = {
+            isPlaying: false,
+            isPaused: false,
+            isShowingExplanation: false,
+            playerMode: 1, // 1 = เล่นคนเดียว (ตรวจจับมือ 1 ข้าง), 2 = เล่น 2 คน
+            configuredDuration: 60, // เวลาเริ่มต้น 60 วินาที (1 นาที)
+            timePresetMode: 60, // 60 | 180 | 300 | 'custom'
+            timeLeft: 60,
+            timerInterval: null,
+            scores: {
+                p1: { correct: 0, wrong: 0 },
+                p2: { correct: 0, wrong: 0 }
+            }
+        };
+
+        /**
+         * 2. ระบบเสียงสังเคราะห์ด้วย Web Audio API (ไม่ต้องใช้ไฟล์เสียงภายนอก)
+         */
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContextClass();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSoundEffect(type) {
+            try {
+                initAudio();
+                const now = audioCtx.currentTime;
+
+                if (type === 'hover') {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(520, now);
+                    gain.gain.setValueAtTime(0.05, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now);
+                    osc.stop(now + 0.08);
+                } else if (type === 'correct') {
+                    [523.25, 659.25, 783.99, 1046.50].forEach((freq, idx) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'triangle';
+                        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+                        gain.gain.setValueAtTime(0.18, now + idx * 0.08);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.25);
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.start(now + idx * 0.08);
+                        osc.stop(now + idx * 0.08 + 0.25);
+                    });
+                } else if (type === 'wrong') {
+                    [300, 220].forEach((freq, idx) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'sawtooth';
+                        osc.frequency.setValueAtTime(freq, now + idx * 0.15);
+                        gain.gain.setValueAtTime(0.15, now + idx * 0.15);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.15 + 0.28);
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.start(now + idx * 0.15);
+                        osc.stop(now + idx * 0.15 + 0.28);
+                    });
+                } else if (type === 'gameover') {
+                    [440, 554.37, 659.25, 880].forEach((freq, idx) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+                        gain.gain.setValueAtTime(0.2, now + idx * 0.12);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.4);
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.start(now + idx * 0.12);
+                        osc.stop(now + idx * 0.12 + 0.4);
+                    });
+                }
+            } catch (err) {
+                console.warn('Web Audio API error:', err);
+            }
+        }
+
+        /**
+         * 3. ระบบ Hand Tracking (MediaPipe Hands) + Smoothing + ป้องกัน Double Flip
+         */
+        const videoElement = document.getElementById('webcam-video');
+        const canvasElement = document.getElementById('ar-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        let handsDetector = null;
+        let isCameraReady = false;
+        let isProcessingFrame = false;
+
+        // ใช้ LERP (Linear Interpolation) ทำ Smoothing ลดอาการสั่น
+        const SMOOTHING_FACTOR = 0.32;
+        // เวลาชี้ค้างเพื่อเลือกคำตอบ 5 วินาที (5,000 มิลลิวินาที)
+        const DWELL_DURATION_MS = 5000;
+
+        let virtualCursors = [
+            {
+                id: 1,
+                active: false,
+                rawX: window.innerWidth / 2,
+                rawY: window.innerHeight / 2,
+                smoothX: window.innerWidth / 2,
+                smoothY: window.innerHeight / 2,
+                landmarks: null,
+                hoveredElement: null,
+                hoverStartTime: 0,
+                dwellProgress: 0,
+                pulsePhase: 0
+            },
+            {
+                id: 2,
+                active: false,
+                rawX: window.innerWidth / 2,
+                rawY: window.innerHeight / 2,
+                smoothX: window.innerWidth / 2,
+                smoothY: window.innerHeight / 2,
+                landmarks: null,
+                hoveredElement: null,
+                hoverStartTime: 0,
+                dwellProgress: 0,
+                pulsePhase: Math.PI
+            }
+        ];
+
+        function resizeCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        /**
+         * คำนวณพิกัดจาก MediaPipe Normalized Coordinates (0..1)
+         * ให้ตรงกับวิดีโอที่ใช้ CSS object-fit: cover และ scaleX(-1) (ป้องกัน Double Flip)
+         */
+        function mapNormalizedToScreen(normX, normY) {
+            const sw = window.innerWidth;
+            const sh = window.innerHeight;
+            const vw = videoElement.videoWidth || 1280;
+            const vh = videoElement.videoHeight || 720;
+
+            const screenRatio = sw / sh;
+            const videoRatio = vw / vh;
+
+            let renderW = sw;
+            let renderH = sh;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            if (screenRatio > videoRatio) {
+                renderW = sw;
+                renderH = sw / videoRatio;
+                offsetY = (sh - renderH) / 2;
+            } else {
+                renderH = sh;
+                renderW = sh * videoRatio;
+                offsetX = (sw - renderW) / 2;
+            }
+
+            // พลิกแกน X เพียงครั้งเดียวด้วย (1 - normX) เพื่อให้ตรงกับภาพกระจกของวิดีโอ
+            const mirroredX = 1 - normX;
+            const screenX = mirroredX * renderW + offsetX;
+            const screenY = normY * renderH + offsetY;
+
+            return {
+                x: Math.max(0, Math.min(sw, screenX)),
+                y: Math.max(0, Math.min(sh, screenY))
+            };
+        }
+
+        async function initCameraAndHands() {
+            if (isCameraReady) return true;
+
+            const loadingMsg = document.getElementById('camera-loading-msg');
+            loadingMsg.classList.remove('hidden');
+            loadingMsg.textContent = 'กำลังเปิดกล้องเว็บแคมและโหลดโมเดล AI (MediaPipe Hands)... กรุณารอสักครู่';
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                });
+
+                videoElement.srcObject = stream;
+                await new Promise((resolve) => {
+                    videoElement.onloadeddata = () => {
+                        videoElement.play();
+                        resolve();
+                    };
+                });
+
+                handsDetector = new Hands({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
+                });
+
+                handsDetector.setOptions({
+                    maxNumHands: gameState.playerMode === 1 ? 1 : 2,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+
+                handsDetector.onResults(onHandsResults);
+
+                if (typeof handsDetector.initialize === 'function') {
+                    await handsDetector.initialize();
+                }
+
+                isCameraReady = true;
+                loadingMsg.classList.add('hidden');
+
+                async function processVideoFrame() {
+                    if (
+                        videoElement.readyState >= 2 &&
+                        !videoElement.paused &&
+                        handsDetector &&
+                        !isProcessingFrame
+                    ) {
+                        isProcessingFrame = true;
+                        try {
+                            await handsDetector.send({ image: videoElement });
+                        } catch (frameErr) {
+                            console.warn('MediaPipe frame send warning:', frameErr);
+                        } finally {
+                            isProcessingFrame = false;
+                        }
+                    }
+                    requestAnimationFrame(processVideoFrame);
+                }
+                requestAnimationFrame(processVideoFrame);
+                requestAnimationFrame(renderARLoop);
+
+                return true;
+            } catch (error) {
+                console.error('Camera/MediaPipe initialization error:', error);
+                loadingMsg.textContent = '⚠️ ไม่สามารถเปิดกล้องหรือโหลดโมเดลตรวจจับมือได้ กรุณาอนุญาตการใช้กล้องและตรวจสอบอินเทอร์เน็ต';
+                return false;
+            }
+        }
+
+        function onHandsResults(results) {
+            const statusDot = document.getElementById('hand-status-dot');
+            const statusText = document.getElementById('hand-status-text');
+            const landmarksList = results.multiHandLandmarks || [];
+
+            if (landmarksList.length === 0) {
+                virtualCursors[0].active = false;
+                virtualCursors[0].landmarks = null;
+                virtualCursors[1].active = false;
+                virtualCursors[1].landmarks = null;
+                if (statusDot && statusText) {
+                    statusDot.className = 'w-3 h-3 rounded-full bg-amber-400 animate-ping';
+                    statusText.textContent = 'ชูนิ้วชี้หน้ากล้อง...';
+                }
+                return;
+            }
+
+            if (statusDot && statusText) {
+                statusDot.className = 'w-3 h-3 rounded-full bg-emerald-400';
+                statusText.textContent = gameState.playerMode === 1
+                    ? 'ตรวจพบนิ้วชี้แล้ว'
+                    : `ตรวจพบ ${landmarksList.length} มือ`;
+            }
+
+            const sw = window.innerWidth;
+
+            if (gameState.playerMode === 1) {
+                const handLandmarks = landmarksList[0];
+                const indexTip = handLandmarks[8];
+                const mapped = mapNormalizedToScreen(indexTip.x, indexTip.y);
+
+                if (!virtualCursors[0].active) {
+                    virtualCursors[0].smoothX = mapped.x;
+                    virtualCursors[0].smoothY = mapped.y;
+                }
+
+                virtualCursors[0].rawX = mapped.x;
+                virtualCursors[0].rawY = mapped.y;
+                virtualCursors[0].landmarks = handLandmarks;
+                virtualCursors[0].active = true;
+
+                virtualCursors[1].active = false;
+                virtualCursors[1].landmarks = null;
+            } else {
+                let p1Found = false;
+                let p2Found = false;
+
+                landmarksList.forEach((handLandmarks) => {
+                    const indexTip = handLandmarks[8];
+                    const mapped = mapNormalizedToScreen(indexTip.x, indexTip.y);
+
+                    if (mapped.x < sw / 2) {
+                        if (!virtualCursors[0].active) {
+                            virtualCursors[0].smoothX = mapped.x;
+                            virtualCursors[0].smoothY = mapped.y;
+                        }
+                        virtualCursors[0].rawX = mapped.x;
+                        virtualCursors[0].rawY = mapped.y;
+                        virtualCursors[0].landmarks = handLandmarks;
+                        virtualCursors[0].active = true;
+                        p1Found = true;
+                    } else {
+                        if (!virtualCursors[1].active) {
+                            virtualCursors[1].smoothX = mapped.x;
+                            virtualCursors[1].smoothY = mapped.y;
+                        }
+                        virtualCursors[1].rawX = mapped.x;
+                        virtualCursors[1].rawY = mapped.y;
+                        virtualCursors[1].landmarks = handLandmarks;
+                        virtualCursors[1].active = true;
+                        p2Found = true;
+                    }
+                });
+
+                if (!p1Found) {
+                    virtualCursors[0].active = false;
+                    virtualCursors[0].landmarks = null;
+                }
+                if (!p2Found) {
+                    virtualCursors[1].active = false;
+                    virtualCursors[1].landmarks = null;
+                }
+            }
+        }
+
+        function renderARLoop(timestamp) {
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            document.querySelectorAll('.ar-target, .ar-target-2p').forEach(el => {
+                el.classList.remove('choice-yes-active', 'choice-no-active');
+            });
+
+            const maxCursors = gameState.playerMode === 1 ? 1 : 2;
+
+            for (let i = 0; i < maxCursors; i++) {
+                const cursor = virtualCursors[i];
+                if (!cursor.active) {
+                    cursor.hoveredElement = null;
+                    cursor.dwellProgress = 0;
+                    continue;
+                }
+
+                cursor.smoothX += (cursor.rawX - cursor.smoothX) * SMOOTHING_FACTOR;
+                cursor.smoothY += (cursor.rawY - cursor.smoothY) * SMOOTHING_FACTOR;
+                cursor.pulsePhase += 0.12;
+
+                if (cursor.landmarks) {
+                    drawIndexFingerGuide(cursor.landmarks);
+                }
+
+                if (gameState.isPlaying || gameState.isPaused) {
+                    checkCursorButtonCollision(cursor, timestamp);
+                } else {
+                    cursor.hoveredElement = null;
+                    cursor.dwellProgress = 0;
+                }
+
+                drawBlueGlowCursor(cursor);
+            }
+
+            requestAnimationFrame(renderARLoop);
+        }
+
+        function drawIndexFingerGuide(landmarks) {
+            const indexJoints = [5, 6, 7, 8];
+            canvasCtx.save();
+            canvasCtx.beginPath();
+            indexJoints.forEach((jointIdx, i) => {
+                const pt = mapNormalizedToScreen(landmarks[jointIdx].x, landmarks[jointIdx].y);
+                if (i === 0) canvasCtx.moveTo(pt.x, pt.y);
+                else canvasCtx.lineTo(pt.x, pt.y);
+            });
+            canvasCtx.strokeStyle = 'rgba(96, 165, 250, 0.55)';
+            canvasCtx.lineWidth = 4;
+            canvasCtx.lineCap = 'round';
+            canvasCtx.stroke();
+            canvasCtx.restore();
+        }
+
+        function drawBlueGlowCursor(cursor) {
+            const x = cursor.smoothX;
+            const y = cursor.smoothY;
+            const pulseRadius = 22 + Math.sin(cursor.pulsePhase) * 4;
+
+            canvasCtx.save();
+
+            const gradient = canvasCtx.createRadialGradient(x, y, 4, x, y, pulseRadius * 2.2);
+            gradient.addColorStop(0, 'rgba(59, 130, 246, 0.95)');
+            gradient.addColorStop(0.5, 'rgba(37, 99, 235, 0.45)');
+            gradient.addColorStop(1, 'rgba(29, 78, 216, 0)');
+
+            canvasCtx.beginPath();
+            canvasCtx.arc(x, y, pulseRadius * 2.2, 0, Math.PI * 2);
+            canvasCtx.fillStyle = gradient;
+            canvasCtx.fill();
+
+            canvasCtx.shadowColor = '#60a5fa';
+            canvasCtx.shadowBlur = 20;
+            canvasCtx.beginPath();
+            canvasCtx.arc(x, y, pulseRadius, 0, Math.PI * 2);
+            canvasCtx.fillStyle = 'rgba(37, 99, 235, 0.85)';
+            canvasCtx.fill();
+            canvasCtx.lineWidth = 3;
+            canvasCtx.strokeStyle = '#93c5fd';
+            canvasCtx.stroke();
+
+            canvasCtx.beginPath();
+            canvasCtx.arc(x, y, 6, 0, Math.PI * 2);
+            canvasCtx.fillStyle = '#ffffff';
+            canvasCtx.fill();
+
+            // แสดงวงแหวนและตัวเลขนับถอยหลัง 5 วินาที (5s -> 1s)
+            if (cursor.dwellProgress > 0) {
+                canvasCtx.shadowBlur = 10;
+                canvasCtx.beginPath();
+                canvasCtx.arc(
+                    x,
+                    y,
+                    pulseRadius + 10,
+                    -Math.PI / 2,
+                    -Math.PI / 2 + (Math.PI * 2 * cursor.dwellProgress)
+                );
+                canvasCtx.lineWidth = 6;
+                canvasCtx.lineCap = 'round';
+                canvasCtx.strokeStyle = '#38bdf8';
+                canvasCtx.stroke();
+
+                const remainingSecs = Math.max(1, Math.ceil((1 - cursor.dwellProgress) * (DWELL_DURATION_MS / 1000)));
+                canvasCtx.font = 'bold 14px Prompt';
+                canvasCtx.fillStyle = '#fef08a';
+                canvasCtx.textAlign = 'center';
+                canvasCtx.fillText(`${remainingSecs}s`, x, y + pulseRadius + 24);
+            }
+
+            if (gameState.playerMode === 2) {
+                canvasCtx.shadowBlur = 4;
+                canvasCtx.font = 'bold 14px Prompt';
+                canvasCtx.fillStyle = '#ffffff';
+                canvasCtx.textAlign = 'center';
+                canvasCtx.fillText(`P${cursor.id}`, x, y - pulseRadius - 14);
+            }
+
+            canvasCtx.restore();
+        }
+
+        function checkCursorButtonCollision(cursor, timestamp) {
+            let matchedTarget = null;
+
+            const hudTargets = document.querySelectorAll('.ar-hud-target');
+            hudTargets.forEach((el) => {
+                if (el.offsetParent === null) return;
+                const rect = el.getBoundingClientRect();
+                if (
+                    cursor.smoothX >= rect.left &&
+                    cursor.smoothX <= rect.right &&
+                    cursor.smoothY >= rect.top &&
+                    cursor.smoothY <= rect.bottom
+                ) {
+                    matchedTarget = el;
+                }
+            });
+
+            if (!matchedTarget && gameState.isPlaying && !gameState.isPaused && !gameState.isShowingExplanation) {
+                const selector = gameState.playerMode === 1 ? '.ar-target' : '.ar-target-2p';
+                const targets = document.querySelectorAll(selector);
+
+                targets.forEach((el) => {
+                    const targetPlayer = parseInt(el.getAttribute('data-player'), 10);
+                    if (gameState.playerMode === 2 && targetPlayer !== cursor.id) return;
+
+                    const rect = el.getBoundingClientRect();
+                    if (
+                        cursor.smoothX >= rect.left &&
+                        cursor.smoothX <= rect.right &&
+                        cursor.smoothY >= rect.top &&
+                        cursor.smoothY <= rect.bottom
+                    ) {
+                        matchedTarget = el;
+                    }
+                });
+            }
+
+            if (matchedTarget) {
+                const ansType = matchedTarget.getAttribute('data-answer');
+                if (ansType === 'ใช่') {
+                    matchedTarget.classList.add('choice-yes-active');
+                } else if (ansType === 'ไม่') {
+                    matchedTarget.classList.add('choice-no-active');
+                }
+
+                if (cursor.hoveredElement !== matchedTarget) {
+                    cursor.hoveredElement = matchedTarget;
+                    cursor.hoverStartTime = timestamp;
+                    cursor.dwellProgress = 0;
+                    playSoundEffect('hover');
+                } else {
+                    const elapsed = timestamp - cursor.hoverStartTime;
+                    cursor.dwellProgress = Math.min(1, elapsed / DWELL_DURATION_MS);
+
+                    if (cursor.dwellProgress >= 1) {
+                        const hudAction = matchedTarget.getAttribute('data-hud-action');
+                        const selectedAnswer = matchedTarget.getAttribute('data-answer');
+                        const playerNum = parseInt(matchedTarget.getAttribute('data-player'), 10);
+
+                        cursor.hoveredElement = null;
+                        cursor.dwellProgress = 0;
+
+                        if (hudAction === 'pause') {
+                            togglePauseGame();
+                        } else if (hudAction === 'home') {
+                            goToHomeScreen();
+                        } else if (selectedAnswer) {
+                            handleAnswerSubmission(playerNum, selectedAnswer);
+                        }
+                    }
+                }
+            } else {
+                cursor.hoveredElement = null;
+                cursor.dwellProgress = 0;
+            }
+        }
+
+        /**
+         * 4. ระบบจัดการเกม การสุ่มคำถาม การตรวจคำตอบ และการจับเวลา
+         */
+        function shuffleArray(arr) {
+            const copy = [...arr];
+            for (let i = copy.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [copy[i], copy[j]] = [copy[j], copy[i]];
+            }
+            return copy;
+        }
+
+        function loadNextRandomQuestion() {
+            if (remainingQuestions.length === 0) {
+                remainingQuestions = shuffleArray(questionBank);
+            }
+            currentQuestion = remainingQuestions.pop();
+
+            const questionTextEl = document.getElementById('question-text');
+            questionTextEl.textContent = currentQuestion.question;
+
+            document.getElementById('explanation-banner').classList.add('hidden');
+            gameState.isShowingExplanation = false;
+        }
+
+        async function startGame() {
+            initAudio();
+
+            const camOk = await initCameraAndHands();
+            if (!camOk) return;
+
+            if (handsDetector) {
+                handsDetector.setOptions({
+                    maxNumHands: gameState.playerMode === 1 ? 1 : 2
+                });
+            }
+
+            gameState.scores.p1 = { correct: 0, wrong: 0 };
+            gameState.scores.p2 = { correct: 0, wrong: 0 };
+            gameState.timeLeft = gameState.configuredDuration;
+            gameState.isPlaying = true;
+            gameState.isPaused = false;
+            gameState.isShowingExplanation = false;
+
+            updatePauseButtonUI();
+            document.getElementById('pause-modal').classList.add('hidden');
+
+            updateScoreBoardUI();
+            document.getElementById('timer-display').textContent = gameState.timeLeft;
+
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('end-screen').classList.add('hidden');
+            document.getElementById('hud-header').classList.remove('hidden');
+            document.getElementById('gameplay-screen').classList.remove('hidden');
+
+            setupPlayerModeLayout();
+
+            remainingQuestions = shuffleArray(questionBank);
+            loadNextRandomQuestion();
+
+            if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+            gameState.timerInterval = setInterval(() => {
+                if (!gameState.isPlaying || gameState.isPaused) return;
+                gameState.timeLeft--;
+                document.getElementById('timer-display').textContent = gameState.timeLeft;
+
+                if (gameState.timeLeft <= 0) {
+                    endGame();
+                }
+            }, 1000);
+        }
+
+        function togglePauseGame() {
+            const gameplayVisible = !document.getElementById('gameplay-screen').classList.contains('hidden');
+            if (!gameplayVisible || gameState.timeLeft <= 0) return;
+
+            gameState.isPaused = !gameState.isPaused;
+            playSoundEffect('hover');
+
+            const pauseModal = document.getElementById('pause-modal');
+            const pauseTimeRemaining = document.getElementById('pause-time-remaining');
+
+            if (gameState.isPaused) {
+                gameState.isPlaying = false;
+                pauseTimeRemaining.textContent = gameState.timeLeft;
+                pauseModal.classList.remove('hidden');
+            } else {
+                gameState.isPlaying = true;
+                pauseModal.classList.add('hidden');
+            }
+
+            updatePauseButtonUI();
+        }
+
+        function updatePauseButtonUI() {
+            const iconEl = document.getElementById('pause-btn-icon');
+            const textEl = document.getElementById('pause-btn-text');
+            if (!iconEl || !textEl) return;
+
+            if (gameState.isPaused) {
+                iconEl.textContent = '▶️';
+                textEl.textContent = 'เล่นต่อ';
+            } else {
+                iconEl.textContent = '⏸️';
+                textEl.textContent = 'หยุด';
+            }
+        }
+
+        function goToHomeScreen() {
+            playSoundEffect('hover');
+
+            gameState.isPlaying = false;
+            gameState.isPaused = false;
+            gameState.isShowingExplanation = false;
+
+            if (gameState.timerInterval) {
+                clearInterval(gameState.timerInterval);
+                gameState.timerInterval = null;
+            }
+
+            updatePauseButtonUI();
+
+            document.getElementById('pause-modal').classList.add('hidden');
+            document.getElementById('settings-modal').classList.add('hidden');
+            document.getElementById('hud-header').classList.add('hidden');
+            document.getElementById('gameplay-screen').classList.add('hidden');
+            document.getElementById('end-screen').classList.add('hidden');
+            document.getElementById('start-screen').classList.remove('hidden');
+        }
+
+        function handleAnswerSubmission(playerNumber, chosenAnswer) {
+            if (!gameState.isPlaying || gameState.isShowingExplanation || !currentQuestion) return;
+
+            gameState.isShowingExplanation = true;
+            const isCorrect = chosenAnswer === currentQuestion.answer;
+
+            if (playerNumber === 1) {
+                if (isCorrect) gameState.scores.p1.correct++;
+                else gameState.scores.p1.wrong++;
+            } else {
+                if (isCorrect) gameState.scores.p2.correct++;
+                else gameState.scores.p2.wrong++;
+            }
+
+            updateScoreBoardUI();
+            playSoundEffect(isCorrect ? 'correct' : 'wrong');
+
+            const banner = document.getElementById('explanation-banner');
+            const box = document.getElementById('explanation-box');
+            const title = document.getElementById('explanation-title');
+            const detail = document.getElementById('explanation-detail');
+
+            banner.classList.remove('hidden');
+
+            const playerPrefix = gameState.playerMode === 2 ? `[ผู้เล่น ${playerNumber}] ` : '';
+
+            if (isCorrect) {
+                box.className = 'glass-panel rounded-3xl p-4 sm:p-6 border-4 border-emerald-400 bg-emerald-950/85 shadow-2xl text-center';
+                title.className = 'text-2xl sm:text-3xl font-black text-emerald-300 mb-2';
+                title.textContent = `${playerPrefix}ถูกต้อง! (คำตอบคือ "${currentQuestion.answer}") 🎉`;
+            } else {
+                box.className = 'glass-panel rounded-3xl p-4 sm:p-6 border-4 border-rose-400 bg-rose-950/85 shadow-2xl text-center';
+                title.className = 'text-2xl sm:text-3xl font-black text-rose-300 mb-2';
+                title.textContent = `${playerPrefix}ยังไม่ถูก! (คำตอบที่ถูกคือ "${currentQuestion.answer}") 💡`;
+            }
+
+            detail.textContent = `คำอธิบาย: ${currentQuestion.explanation}`;
+
+            setTimeout(() => {
+                if (gameState.isPlaying) {
+                    loadNextRandomQuestion();
+                }
+            }, 3200);
+        }
+
+        function updateScoreBoardUI() {
+            const p1CorrectEl = document.getElementById('p1-correct');
+            const p1WrongEl = document.getElementById('p1-wrong');
+            const p2CorrectEl = document.getElementById('p2-correct');
+            const p2WrongEl = document.getElementById('p2-wrong');
+
+            if (p1CorrectEl) p1CorrectEl.textContent = gameState.scores.p1.correct;
+            if (p1WrongEl) p1WrongEl.textContent = gameState.scores.p1.wrong;
+            if (p2CorrectEl) p2CorrectEl.textContent = gameState.scores.p2.correct;
+            if (p2WrongEl) p2WrongEl.textContent = gameState.scores.p2.wrong;
+        }
+
+        function endGame() {
+            gameState.isPlaying = false;
+            if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+
+            playSoundEffect('gameover');
+
+            document.getElementById('gameplay-screen').classList.add('hidden');
+            document.getElementById('end-screen').classList.remove('hidden');
+
+            document.getElementById('end-p1-correct').textContent = gameState.scores.p1.correct;
+            document.getElementById('end-p1-wrong').textContent = gameState.scores.p1.wrong;
+
+            const endP2Box = document.getElementById('end-p2-box');
+            const endP1Title = document.getElementById('end-p1-title');
+
+            if (gameState.playerMode === 2) {
+                endP1Title.textContent = 'ผู้เล่นที่ 1 (ฝั่งซ้าย)';
+                endP2Box.classList.remove('hidden');
+                document.getElementById('end-p2-correct').textContent = gameState.scores.p2.correct;
+                document.getElementById('end-p2-wrong').textContent = gameState.scores.p2.wrong;
+            } else {
+                endP1Title.textContent = 'คะแนนรวมของคุณ';
+                endP2Box.classList.add('hidden');
+            }
+        }
+
+        // ปิดกั้นการใช้คีย์บอร์ดระหว่างเล่นเกม
+        window.addEventListener('keydown', (e) => {
+            if (gameState.isPlaying) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, { capture: true });
+
+        /**
+         * 5. ระบบหน้าต่างตั้งค่า (Settings), สลับโหมด 1-2 คน, ตั้งเวลา และนำเข้าไฟล์ Excel
+         */
+        function openSettingsModal() {
+            if (gameState.isPlaying) {
+                gameState.isPlaying = false;
+            }
+            renderQuestionsPreviewTable();
+            document.getElementById('settings-modal').classList.remove('hidden');
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settings-modal').classList.add('hidden');
+            const gameplayVisible = !document.getElementById('gameplay-screen').classList.contains('hidden');
+            if (gameplayVisible && gameState.timeLeft > 0) {
+                gameState.isPlaying = true;
+            }
+        }
+
+        function setPlayerMode(mode) {
+            gameState.playerMode = mode;
+
+            const btn1p = document.getElementById('mode-btn-1p');
+            const btn2p = document.getElementById('mode-btn-2p');
+            const modeLabel = document.getElementById('current-mode-label');
+
+            if (mode === 1) {
+                btn1p.className = 'p-4 rounded-2xl border-2 border-blue-500 bg-blue-600/20 text-left transition flex items-start gap-4';
+                btn2p.className = 'p-4 rounded-2xl border-2 border-slate-700 bg-slate-800/60 text-left transition flex items-start gap-4';
+                modeLabel.textContent = 'เล่นคนเดียว (1P)';
+            } else {
+                btn2p.className = 'p-4 rounded-2xl border-2 border-cyan-400 bg-cyan-600/20 text-left transition flex items-start gap-4';
+                btn1p.className = 'p-4 rounded-2xl border-2 border-slate-700 bg-slate-800/60 text-left transition flex items-start gap-4';
+                modeLabel.textContent = 'เล่น 2 คน (2P)';
+            }
+
+            if (handsDetector) {
+                handsDetector.setOptions({
+                    maxNumHands: mode === 1 ? 1 : 2
+                });
+            }
+
+            setupPlayerModeLayout();
+        }
+
+        function selectTimePreset(preset) {
+            gameState.timePresetMode = preset;
+            const customContainer = document.getElementById('custom-time-container');
+
+            if (preset === 'custom') {
+                customContainer.classList.remove('hidden');
+                applyCustomTimeInput();
+            } else {
+                customContainer.classList.add('hidden');
+                gameState.configuredDuration = Number(preset);
+                updateDurationLabelsUI();
+            }
+
+            const presets = [60, 180, 300, 'custom'];
+            presets.forEach((p) => {
+                const btn = document.getElementById(`time-btn-${p}`);
+                if (!btn) return;
+                if (p === preset) {
+                    btn.className = 'p-3 rounded-xl border-2 border-amber-400 bg-amber-500/20 text-center transition';
+                } else {
+                    btn.className = 'p-3 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-center transition';
+                }
+            });
+        }
+
+        function applyCustomTimeInput() {
+            const inputEl = document.getElementById('custom-time-input');
+            if (!inputEl) return;
+
+            let rawSeconds = parseInt(inputEl.value, 10);
+            if (isNaN(rawSeconds) || rawSeconds < 10) {
+                rawSeconds = 10;
+            } else if (rawSeconds > 3600) {
+                rawSeconds = 3600;
+            }
+
+            gameState.configuredDuration = rawSeconds;
+            updateDurationLabelsUI();
+        }
+
+        function updateDurationLabelsUI() {
+            const secs = gameState.configuredDuration;
+            const startLabel = document.getElementById('start-duration-label');
+            const endReplayLabel = document.getElementById('end-replay-duration');
+            const timerDisplay = document.getElementById('timer-display');
+
+            let readableText = `${secs} วินาที`;
+            if (secs % 60 === 0) {
+                const mins = secs / 60;
+                readableText = `${mins} นาที (${secs} วินาที)`;
+            }
+
+            if (startLabel) startLabel.textContent = readableText;
+            if (endReplayLabel) endReplayLabel.textContent = `${secs} วินาที`;
+            if (!gameState.isPlaying && !gameState.isPaused && timerDisplay) {
+                timerDisplay.textContent = secs;
+            }
+        }
+
+        function setupPlayerModeLayout() {
+            const p1Badge = document.getElementById('p1-badge');
+            const p2ScorePanel = document.getElementById('p2-score-panel');
+            const choices1P = document.getElementById('choices-1p-container');
+            const choices2P = document.getElementById('choices-2p-container');
+            const divider = document.getElementById('two-player-divider');
+
+            if (gameState.playerMode === 1) {
+                p1Badge.textContent = 'คะแนน';
+                p2ScorePanel.classList.add('hidden');
+                choices1P.classList.remove('hidden');
+                choices2P.classList.add('hidden');
+                divider.classList.add('hidden');
+            } else {
+                p1Badge.textContent = 'ผู้เล่น 1 (ซ้าย)';
+                p2ScorePanel.classList.remove('hidden');
+                choices1P.classList.add('hidden');
+                choices2P.classList.remove('hidden');
+                divider.classList.remove('hidden');
+            }
+        }
+
+        function normalizeYesNoAnswer(rawVal) {
+            const str = String(rawVal || '').trim().toLowerCase();
+            if (['ใช่', 'yes', 'y', 'true', 'ถูก', '1'].includes(str)) {
+                return 'ใช่';
+            }
+            if (['ไม่', 'ไม่ใช่', 'no', 'n', 'false', 'ผิด', '0'].includes(str)) {
+                return 'ไม่';
+            }
+            return null;
+        }
+
+        function handleExcelImport(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const statusMsg = document.getElementById('import-status-msg');
+            statusMsg.className = 'text-xs sm:text-sm font-semibold text-amber-300';
+            statusMsg.textContent = 'กำลังอ่านไฟล์ Excel...';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+
+                    const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+                    const importedQuestions = [];
+
+                    rows.forEach((row, index) => {
+                        if (!row || row.length < 2) return;
+                        const qText = String(row[0] || '').trim();
+                        const rawAns = String(row[1] || '').trim();
+                        const expText = String(row[2] || '').trim();
+
+                        if (index === 0 && (qText.includes('คำถาม') || qText.toLowerCase().includes('question'))) {
+                            return;
+                        }
+
+                        const normalizedAns = normalizeYesNoAnswer(rawAns);
+                        if (qText && normalizedAns) {
+                            importedQuestions.push({
+                                question: qText,
+                                answer: normalizedAns,
+                                explanation: expText || `เฉลยคือ "${normalizedAns}"`
+                            });
+                        }
+                    });
+
+                    if (importedQuestions.length > 0) {
+                        questionBank = importedQuestions;
+                        remainingQuestions = shuffleArray(questionBank);
+                        renderQuestionsPreviewTable();
+
+                        statusMsg.className = 'text-xs sm:text-sm font-semibold text-emerald-400';
+                        statusMsg.textContent = `✅ นำเข้าสำเร็จ ${importedQuestions.length} ข้อ!`;
+                    } else {
+                        statusMsg.className = 'text-xs sm:text-sm font-semibold text-rose-400';
+                        statusMsg.textContent = '⚠️ ไม่พบข้อมูลที่ตรงรูปแบบ กรุณาตรวจสอบคอลัมน์ A (คำถาม) และ B (ใช่/ไม่)';
+                    }
+                } catch (err) {
+                    console.error('Excel parse error:', err);
+                    statusMsg.className = 'text-xs sm:text-sm font-semibold text-rose-400';
+                    statusMsg.textContent = '❌ เกิดข้อผิดพลาดในการอ่านไฟล์ Excel';
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function downloadSampleExcel() {
+            const wsData = [
+                ["คำถาม", "คำตอบ", "คำอธิบาย"],
+                ...DEFAULT_QUESTIONS.map(q => [q.question, q.answer, q.explanation])
+            ];
+
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet(wsData);
+            XLSX.utils.book_append_sheet(wb, ws, "Questions");
+            XLSX.writeFile(wb, "ตัวอย่างข้อสอบ_การปฏิรูปศาสนา.xlsx");
+        }
+
+        function resetDefaultQuestions() {
+            questionBank = [...DEFAULT_QUESTIONS];
+            remainingQuestions = shuffleArray(questionBank);
+            renderQuestionsPreviewTable();
+
+            const statusMsg = document.getElementById('import-status-msg');
+            statusMsg.className = 'text-xs sm:text-sm font-semibold text-blue-300';
+            statusMsg.textContent = '🔄 คืนค่าคำถามเริ่มต้น 5 ข้อเรียบร้อยแล้ว';
+        }
+
+        function renderQuestionsPreviewTable() {
+            const tbody = document.getElementById('questions-preview-tbody');
+            const countModal = document.getElementById('modal-question-count');
+            const countStart = document.getElementById('question-count-label');
+
+            if (!tbody || !countModal || !countStart) return;
+
+            countModal.textContent = questionBank.length;
+            countStart.textContent = questionBank.length;
+
+            tbody.innerHTML = '';
+            questionBank.forEach((item, idx) => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-800/60';
+                const badgeColor = item.answer === 'ใช่'
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : 'bg-rose-500/20 text-rose-300 border-rose-500/40';
+
+                tr.innerHTML = `
+                    <td class="p-2.5 font-bold text-slate-400">${idx + 1}</td>
+                    <td class="p-2.5 text-white font-medium">${item.question}</td>
+                    <td class="p-2.5 text-center">
+                        <span class="px-2.5 py-0.5 rounded-full text-xs font-bold border ${badgeColor}">${item.answer}</span>
+                    </td>
+                    <td class="p-2.5 text-slate-300">${item.explanation}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            renderQuestionsPreviewTable();
+        });
+    </script>
 </body>
 </html>
