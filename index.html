@@ -1,1719 +1,1053 @@
-<!DOCTYPE html>
-<html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Yes or No - Quizesgame</title>
-    
-    <!-- Google Fonts: Prompt สำหรับภาษาไทยที่อ่านง่ายบนหน้าจอเกม -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-    
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- TensorFlow.js & MediaPipe Libraries (ตามข้อกำหนดทางเทคนิค) -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1635988162/pose.js" crossorigin="anonymous"></script>
-    
-    <!-- SheetJS (xlsx) สำหรับระบบ Import ไฟล์ Excel -->
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+/**
+ * ============================================================================
+ * ไฟล์: app.js (JavaScript Logic สำหรับเกม Yes or No - Quizesgame)
+ * ควบคุมระบบ Hand Tracking (MediaPipe Hands), เสียง Web Audio API,
+ * การตั้งเวลาแข่งขัน, โหมดผู้เล่น 1-2 คน และการนำเข้าไฟล์ Excel
+ * ============================================================================
+ */
 
-    <style>
-        * {
-            font-family: 'Prompt', sans-serif;
-            user-select: none;
-            -webkit-user-select: none;
+// 1. คลังข้อมูลคำถามเริ่มต้น (เรื่อง การปฏิรูปศาสนา)
+const DEFAULT_QUESTIONS = [
+    {
+        question: "การปฏิรูปศาสนาเริ่มต้นขึ้นใน ค.ศ. 1517 เมื่อมาร์ติน ลูเทอร์ ประกาศ 95 ข้อ เพื่อคัดค้านการขายใบไถ่บาป",
+        answer: "ใช่",
+        explanation: "ลูเทอร์ประกาศ 95 ข้อ (95 Theses) ที่โบสถ์วิทเทนแบร์ก ประเทศเยอรมนี ใน ค.ศ. 1517 ถือเป็นจุดเริ่มต้นของการปฏิรูปศาสนา"
+    },
+    {
+        question: "ผู้จุดชนวนการปฏิรูปศาสนาเป็นชาวฝรั่งเศส",
+        answer: "ไม่",
+        explanation: "มาร์ติน ลูเทอร์ เป็นชาวเยอรมัน ส่วนฌอง คาลวิน เป็นชาวฝรั่งเศสและเป็นผู้นำปฏิรูปในรุ่นถัดมา"
+    },
+    {
+        question: "คำว่า \"โปรเตสแตนต์\" มีความหมายว่า \"ผู้ประท้วง\"",
+        answer: "ใช่",
+        explanation: "คำนี้มาจากเหตุการณ์ที่เจ้าผู้ครองแคว้นฝ่ายลูเทอร์ประท้วงมติของสภาสไปเออร์ ใน ค.ศ. 1529"
+    },
+    {
+        question: "การขายใบไถ่บาปของคริสตจักรมีจุดประสงค์สำคัญเพื่อหาเงินไปสร้างมหาวิหารเซนต์ปีเตอร์ที่กรุงโรม",
+        answer: "ใช่",
+        explanation: "พระสันตะปาปาลีโอที่ 10 ต้องการเงินสร้างมหาวิหารเซนต์ปีเตอร์ จึงสนับสนุนการขายใบไถ่บาป ซึ่งลูเทอร์มองว่าเป็นการหาผลประโยชน์จากศาสนา"
+    },
+    {
+        question: "นิกายแองกลิกันก่อตั้งโดยมาร์ติน ลูเทอร์",
+        answer: "ไม่",
+        explanation: "นิกายแองกลิกันเกิดจากพระเจ้าเฮนรีที่ 8 แห่งอังกฤษ ผ่านพระราชบัญญัติความเป็นใหญ่ ค.ศ. 1534 ส่วนลูเทอร์ตั้งนิกายลูเทอรัน"
+    }
+];
+
+// State ของคลังคำถามและการสุ่ม
+let questionBank = [...DEFAULT_QUESTIONS];
+let remainingQuestions = [];
+let currentQuestion = null;
+
+// State ของเกม
+let gameState = {
+    isPlaying: false,
+    isPaused: false,
+    isShowingExplanation: false,
+    playerMode: 1, // 1 = เล่นคนเดียว (ตรวจจับมือ 1 ข้าง), 2 = เล่น 2 คน
+    configuredDuration: 60, // เวลาเริ่มต้น 60 วินาที (1 นาที)
+    timePresetMode: 60, // 60 | 180 | 300 | 'custom'
+    timeLeft: 60,
+    timerInterval: null,
+    scores: {
+        p1: { correct: 0, wrong: 0 },
+        p2: { correct: 0, wrong: 0 }
+    }
+};
+
+/**
+ * 2. ระบบเสียงสังเคราะห์ด้วย Web Audio API (ไม่ต้องใช้ไฟล์เสียงภายนอก)
+ */
+let audioCtx = null;
+
+function initAudio() {
+    if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+}
+
+function playSoundEffect(type) {
+    try {
+        initAudio();
+        const now = audioCtx.currentTime;
+
+        if (type === 'hover') {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(520, now);
+            gain.gain.setValueAtTime(0.05, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start(now);
+            osc.stop(now + 0.08);
+        } else if (type === 'correct') {
+            [523.25, 659.25, 783.99, 1046.50].forEach((freq, idx) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+                gain.gain.setValueAtTime(0.18, now + idx * 0.08);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.25);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now + idx * 0.08);
+                osc.stop(now + idx * 0.08 + 0.25);
+            });
+        } else if (type === 'wrong') {
+            [300, 220].forEach((freq, idx) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(freq, now + idx * 0.15);
+                gain.gain.setValueAtTime(0.15, now + idx * 0.15);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.15 + 0.28);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now + idx * 0.15);
+                osc.stop(now + idx * 0.15 + 0.28);
+            });
+        } else if (type === 'gameover') {
+            [440, 554.37, 659.25, 880].forEach((freq, idx) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+                gain.gain.setValueAtTime(0.2, now + idx * 0.12);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.4);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now + idx * 0.12);
+                osc.stop(now + idx * 0.12 + 0.4);
+            });
         }
+    } catch (err) {
+        console.warn('Web Audio API error:', err);
+    }
+}
 
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background-color: #0f172a;
-        }
+/**
+ * 3. ระบบ Hand Tracking (MediaPipe Hands) + Smoothing + ป้องกัน Double Flip
+ */
+const videoElement = document.getElementById('webcam-video');
+const canvasElement = document.getElementById('ar-canvas');
+const canvasCtx = canvasElement.getContext('2d');
 
-        /* 
-         * กล้องพื้นหลังแสดงผลแบบกระจกเงา (Mirror)
-         * ระวัง Double Flip: เราสลับด้านด้วย CSS ที่นี่เพียงจุดเดียว 
-         * ส่วนใน Canvas เราจะคำนวณ (1 - x) ให้ตรงกับภาพที่ตาเห็น
-         */
-        #webcam-video {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            object-fit: cover;
-            transform: scaleX(-1);
-            z-index: 1;
-            filter: brightness(0.85) contrast(1.05);
-        }
+let handsDetector = null;
+let isCameraReady = false;
+let isProcessingFrame = false;
 
-        /* Canvas สำหรับวาดเคอร์เซอร์มือเสมือนและเอฟเฟกต์ AR */
-        #ar-canvas {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            z-index: 30;
-            pointer-events: none;
-        }
+// ใช้ LERP (Linear Interpolation) ทำ Smoothing ลดอาการสั่น
+const SMOOTHING_FACTOR = 0.32;
+// เวลาชี้ค้างเพื่อเลือกคำตอบ 5 วินาที (5,000 มิลลิวินาที)
+const DWELL_DURATION_MS = 5000;
 
-        /* เลเยอร์ UI หลัก */
-        #ui-layer {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            z-index: 20;
-        }
+let virtualCursors = [
+    {
+        id: 1,
+        active: false,
+        rawX: window.innerWidth / 2,
+        rawY: window.innerHeight / 2,
+        smoothX: window.innerWidth / 2,
+        smoothY: window.innerHeight / 2,
+        landmarks: null,
+        hoveredElement: null,
+        hoverStartTime: 0,
+        dwellProgress: 0,
+        pulsePhase: 0
+    },
+    {
+        id: 2,
+        active: false,
+        rawX: window.innerWidth / 2,
+        rawY: window.innerHeight / 2,
+        smoothX: window.innerWidth / 2,
+        smoothY: window.innerHeight / 2,
+        landmarks: null,
+        hoveredElement: null,
+        hoverStartTime: 0,
+        dwellProgress: 0,
+        pulsePhase: Math.PI
+    }
+];
 
-        /* ป้องกันการใช้เมาส์หรือคีย์บอร์ดกดปุ่มคำตอบระหว่างเล่นเกม (บังคับใช้ Hand Tracking เท่านั้น) */
-        .gameplay-no-mouse {
-            pointer-events: none !important;
-            cursor: none !important;
-        }
+function resizeCanvas() {
+    canvasElement.width = window.innerWidth;
+    canvasElement.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
 
-        /* เอฟเฟกต์เรืองแสงของปุ่มคำตอบเมื่อนิ้วชี้เคลื่อนเข้าไปใกล้ */
-        .choice-card {
-            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s ease, border-color 0.2s ease;
-        }
-        
-        .choice-yes-active {
-            transform: scale(1.08);
-            box-shadow: 0 0 40px rgba(34, 197, 94, 0.85), inset 0 0 20px rgba(34, 197, 94, 0.5);
-            border-color: #4ade80 !important;
-        }
+/**
+ * คำนวณพิกัดจาก MediaPipe Normalized Coordinates (0..1)
+ * ให้ตรงกับวิดีโอที่ใช้ CSS object-fit: cover และ scaleX(-1) (ป้องกัน Double Flip)
+ */
+function mapNormalizedToScreen(normX, normY) {
+    const sw = window.innerWidth;
+    const sh = window.innerHeight;
+    const vw = videoElement.videoWidth || 1280;
+    const vh = videoElement.videoHeight || 720;
 
-        .choice-no-active {
-            transform: scale(1.08);
-            box-shadow: 0 0 40px rgba(239, 68, 68, 0.85), inset 0 0 20px rgba(239, 68, 68, 0.5);
-            border-color: #f87171 !important;
-        }
+    const screenRatio = sw / sh;
+    const videoRatio = vw / vh;
 
-        /* Glassmorphism Effect */
-        .glass-panel {
-            background: rgba(15, 23, 42, 0.78);
-            backdrop-filter: blur(14px);
-            -webkit-backdrop-filter: blur(14px);
-            border: 1px solid rgba(255, 255, 255, 0.18);
-        }
+    let renderW = sw;
+    let renderH = sh;
+    let offsetX = 0;
+    let offsetY = 0;
 
-        @keyframes pulseGlow {
-            0%, 100% { box-shadow: 0 0 15px rgba(59, 130, 246, 0.6); }
-            50% { box-shadow: 0 0 30px rgba(96, 165, 250, 0.95); }
-        }
+    if (screenRatio > videoRatio) {
+        renderW = sw;
+        renderH = sw / videoRatio;
+        offsetY = (sh - renderH) / 2;
+    } else {
+        renderH = sh;
+        renderW = sh * videoRatio;
+        offsetX = (sw - renderW) / 2;
+    }
 
-        .btn-glow {
-            animation: pulseGlow 2s infinite;
-        }
-    </style>
-</head>
-<body class="text-white antialiased">
+    // พลิกแกน X เพียงครั้งเดียวด้วย (1 - normX) เพื่อให้ตรงกับภาพกระจกของวิดีโอ
+    const mirroredX = 1 - normX;
+    const screenX = mirroredX * renderW + offsetX;
+    const screenY = normY * renderH + offsetY;
 
-    <!-- 1. กล้องเว็บแคมพื้นหลังเต็มจอ -->
-    <video id="webcam-video" playsinline autoplay muted></video>
+    return {
+        x: Math.max(0, Math.min(sw, screenX)),
+        y: Math.max(0, Math.min(sh, screenY))
+    };
+}
 
-    <!-- 2. Canvas สำหรับวาดเคอร์เซอร์ปลายนิ้วชี้ (สีน้ำเงิน + Glow + Dwell Ring) -->
-    <canvas id="ar-canvas"></canvas>
+async function initCameraAndHands() {
+    if (isCameraReady) return true;
 
-    <!-- 3. เลเยอร์ส่วนติดต่อผู้ใช้ (UI Layer) -->
-    <div id="ui-layer" class="flex flex-col justify-between p-3 sm:p-6">
+    const loadingMsg = document.getElementById('camera-loading-msg');
+    loadingMsg.classList.remove('hidden');
+    loadingMsg.textContent = 'กำลังเปิดกล้องเว็บแคมและโหลดโมเดล AI (MediaPipe Hands)... กรุณารอสักครู่';
 
-        <!-- ================= TOP BAR: คะแนน, เวลา, และปุ่มตั้งค่า ================= -->
-        <header id="hud-header" class="hidden w-full max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 sm:gap-4 z-30">
-            
-            <!-- แผงคะแนนผู้เล่นที่ 1 (หรือเล่นคนเดียว) -->
-            <div class="glass-panel px-4 py-2 sm:px-6 sm:py-3 rounded-2xl flex items-center gap-3 sm:gap-5 shadow-xl border-l-4 border-l-blue-400">
-                <div class="flex items-center gap-2">
-                    <span id="p1-badge" class="bg-blue-600 text-xs sm:text-sm font-bold px-2.5 py-1 rounded-lg">คะแนน</span>
-                </div>
-                <div class="text-sm sm:text-xl font-extrabold tracking-wide flex items-center gap-3 sm:gap-4">
-                    <span class="text-emerald-400">ถูก = <span id="p1-correct" class="text-white">0</span> ข้อ</span>
-                    <span class="text-slate-500">|</span>
-                    <span class="text-rose-400">ผิด = <span id="p1-wrong" class="text-white">0</span> ข้อ</span>
-                </div>
-            </div>
-
-            <!-- นาฬิกาจับเวลา 60 วินาที -->
-            <div class="glass-panel px-5 py-2 sm:px-7 sm:py-3 rounded-2xl flex items-center gap-2.5 shadow-xl border border-amber-400/40">
-                <span class="text-xl sm:text-2xl">⏱️</span>
-                <div class="text-center">
-                    <span id="timer-display" class="text-2xl sm:text-3xl font-black text-amber-300 tracking-wider">60</span>
-                    <span class="text-xs sm:text-sm text-amber-100 ml-1">วินาที</span>
-                </div>
-            </div>
-
-            <!-- แผงคะแนนผู้เล่นที่ 2 (แสดงเฉพาะโหมดเล่น 2 คน) -->
-            <div id="p2-score-panel" class="hidden glass-panel px-4 py-2 sm:px-6 sm:py-3 rounded-2xl flex items-center gap-3 sm:gap-5 shadow-xl border-l-4 border-l-cyan-400">
-                <div class="flex items-center gap-2">
-                    <span class="bg-cyan-600 text-xs sm:text-sm font-bold px-2.5 py-1 rounded-lg">ผู้เล่น 2 (ขวา)</span>
-                </div>
-                <div class="text-sm sm:text-xl font-extrabold tracking-wide flex items-center gap-3 sm:gap-4">
-                    <span class="text-emerald-400">ถูก = <span id="p2-correct" class="text-white">0</span> ข้อ</span>
-                    <span class="text-slate-500">|</span>
-                    <span class="text-rose-400">ผิด = <span id="p2-wrong" class="text-white">0</span> ข้อ</span>
-                </div>
-            </div>
-
-            <!-- สถานะตรวจจับมือ & ปุ่มคำสั่งด้านบน (หยุด, หน้าหลัก, ตั้งค่า) -->
-            <div class="flex flex-wrap items-center gap-2">
-                <div id="hand-status-badge" class="glass-panel px-3 py-2 rounded-xl text-xs sm:text-sm flex items-center gap-2">
-                    <span id="hand-status-dot" class="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
-                    <span id="hand-status-text" class="text-slate-200 font-medium">กำลังหามือ...</span>
-                </div>
-
-                <!-- ปุ่ม "หยุด" (Pause / Resume) รองรับทั้งคลิกและชี้ด้วยนิ้ว -->
-                <button id="btn-pause-game" data-hud-action="pause" onclick="togglePauseGame()" class="ar-hud-target glass-panel hover:bg-amber-600/80 active:scale-95 transition px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-xl border border-amber-400/50 shadow-lg flex items-center gap-1.5 text-amber-200 font-bold text-xs sm:text-sm" title="หยุดเกมชั่วคราว">
-                    <span id="pause-btn-icon">⏸️</span>
-                    <span id="pause-btn-text">หยุด</span>
-                </button>
-
-                <!-- ปุ่ม "หน้าหลัก" (Home) รองรับทั้งคลิกและชี้ด้วยนิ้ว -->
-                <button id="btn-home-hud" data-hud-action="home" onclick="goToHomeScreen()" class="ar-hud-target glass-panel hover:bg-blue-600/80 active:scale-95 transition px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-xl border border-blue-400/50 shadow-lg flex items-center gap-1.5 text-blue-200 font-bold text-xs sm:text-sm" title="กลับหน้าหลัก">
-                    <span>🏠</span>
-                    <span>หน้าหลัก</span>
-                </button>
-
-                <button id="btn-open-settings-hud" onclick="openSettingsModal()" class="glass-panel hover:bg-slate-800/90 active:scale-95 transition p-2 sm:p-2.5 rounded-xl border border-slate-600 shadow-lg" title="ตั้งค่าเกม">
-                    <svg class="w-5 h-5 sm:w-6 sm:h-6 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                    </svg>
-                </button>
-            </div>
-        </header>
-
-        <!-- ================= PAUSE MODAL: หน้าจอเมื่อกดปุ่ม "หยุด" ================= -->
-        <div id="pause-modal" class="hidden fixed inset-0 z-40 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4">
-            <div class="glass-panel w-full max-w-md rounded-3xl p-6 sm:p-8 text-center border-2 border-amber-400/50 shadow-2xl">
-                <div class="text-5xl mb-3">⏸️</div>
-                <h3 class="text-2xl sm:text-3xl font-extrabold text-amber-300 mb-2">หยุดเกมชั่วคราว</h3>
-                <p class="text-slate-300 text-sm sm:text-base mb-6">เวลาถูกหยุดไว้ที่ <span id="pause-time-remaining" class="font-bold text-white">60</span> วินาที</p>
-                <div class="flex flex-col sm:flex-row justify-center gap-3">
-                    <button data-hud-action="pause" onclick="togglePauseGame()" class="ar-hud-target flex-1 py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-extrabold text-lg shadow-lg transition">
-                        ▶️ เล่นต่อ
-                    </button>
-                    <button data-hud-action="home" onclick="goToHomeScreen()" class="ar-hud-target flex-1 py-3.5 px-6 rounded-2xl bg-slate-700 hover:bg-slate-600 text-white font-bold text-lg border border-slate-500 transition">
-                        🏠 หน้าหลัก
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- ================= START SCREEN: หน้าจอเริ่มต้น ================= -->
-        <main id="start-screen" class="my-auto mx-auto w-full max-w-3xl glass-panel rounded-3xl p-6 sm:p-10 text-center shadow-2xl border border-blue-500/30 z-30">
-            <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-500/20 border border-blue-400/40 text-blue-300 text-xs sm:text-sm font-semibold mb-4">
-                <span>✨ สื่อการเรียนรู้ AR  เกมการศึกษา</span>
-            </div>
-            
-            <h1 class="text-3xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-300 via-white to-amber-200 mb-3 leading-tight">
-                Yes or No - Quizesgame
-            </h1>
-            <p class="text-slate-300 text-sm sm:text-lg mb-6 max-w-2xl mx-auto">
-                ควบคุมเกมด้วย <span class="text-blue-400 font-bold underline">ปลายนิ้วชี้ผ่านกล้องเว็บแคม</span> เท่านั้น! ชูนิ้วชี้เพื่อเลื่อนเคอร์เซอร์สีน้ำเงินไปวางค้างที่คำตอบ <span class="text-emerald-400 font-bold">"ใช่"</span> หรือ <span class="text-rose-400 font-bold">"ไม่"</span>
-            </p>
-
-            <!-- การ์ดแนะนำกติกาและโหมดปัจจุบัน -->
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 text-left">
-                <div class="bg-slate-800/70 p-4 rounded-2xl border border-slate-700">
-                    <div class="text-blue-400 font-bold text-sm mb-1">👆 ระบบ Hand Tracking</div>
-                    <p class="text-xs text-slate-300">ใช้ปลายนิ้วชี้เป็นเมาส์เสมือน ชี้ค้างที่ปุ่ม 10 วินาทีเพื่อตอบ (ห้ามใช้เมาส์/คีย์บอร์ด)</p>
-                </div>
-                <div class="bg-slate-800/70 p-4 rounded-2xl border border-slate-700">
-                    <div class="text-amber-400 font-bold text-sm mb-1">⏱️ เวลา <span id="start-duration-label">1 นาที (60 วินาที)</span></div>
-                    <p class="text-xs text-slate-300">สุ่มคำถามทีละข้อพร้อมเฉลยและคำอธิบายความรู้ เมื่อครบทุกข้อจะสุ่มรอบใหม่อัตโนมัติ</p>
-                </div>
-                <div class="bg-slate-800/70 p-4 rounded-2xl border border-slate-700">
-                    <div class="text-emerald-400 font-bold text-sm mb-1">👥 โหมด & คลังคำถาม</div>
-                    <p class="text-xs text-slate-300">
-                        โหมด: <span id="current-mode-label" class="font-bold text-white">เล่นคนเดียว (1P)</span><br>
-                        คำถามในคลัง: <span id="question-count-label" class="font-bold text-amber-300">5</span> ข้อ
-                    </p>
-                </div>
-            </div>
-
-            <!-- ปุ่มเริ่มเกม & ปุ่มตั้งค่า -->
-            <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-                <button id="btn-start-game" onclick="startGame()" class="w-full sm:w-auto px-10 py-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xl sm:text-2xl shadow-xl btn-glow transition transform active:scale-95 flex items-center justify-center gap-3">
-                    <span>🚀 เริ่มเกม</span>
-                </button>
-                <button onclick="openSettingsModal()" class="w-full sm:w-auto px-6 py-4 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-base sm:text-lg border border-slate-600 transition flex items-center justify-center gap-2">
-                    <span>⚙️ ตั้งค่า / นำเข้า Excel</span>
-                </button>
-            </div>
-
-            <p id="camera-loading-msg" class="hidden mt-4 text-amber-300 text-sm font-medium animate-pulse">
-                กำลังเปิดกล้องเว็บแคมและโหลดโมเดล AI (MediaPipe Hands)... กรุณาอนุญาตการใช้กล้อง
-            </p>
-        </main>
-
-        <!-- ================= GAMEPLAY AREA: พื้นที่แสดงคำถามและตัวเลือกซ้าย-ขวา ================= -->
-        <section id="gameplay-screen" class="hidden gameplay-no-mouse flex-1 w-full max-w-7xl mx-auto flex flex-col justify-between py-2 sm:py-6 relative">
-            
-            <!-- เส้นแบ่งครึ่งจอสำหรับโหมดเล่น 2 คน -->
-            <div id="two-player-divider" class="hidden absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 border-l-2 border-dashed border-white/30 z-10 pointer-events-none flex flex-col justify-end items-center pb-4">
-                <span class="bg-slate-900/80 text-white/70 text-xs px-3 py-1 rounded-full whitespace-nowrap">แบ่งฝั่งผู้เล่น 1 (ซ้าย) | ผู้เล่น 2 (ขวา)</span>
-            </div>
-
-            <!-- กล่องคำถามตรงกลางหน้าจอ ตัวอักษรใหญ่ อ่านง่าย -->
-            <div class="w-full max-w-4xl mx-auto z-20 mt-1 sm:mt-4">
-                <div class="glass-panel rounded-3xl p-5 sm:p-8 shadow-2xl border-2 border-blue-400/40 text-center relative">
-                    <div class="inline-block bg-blue-600/80 text-blue-100 text-xs sm:text-sm font-bold px-3.5 py-1 rounded-full mb-2 sm:mb-3">
-                        คำถามประวัติศาสตร์ (การปฏิรูปศาสนา)
-                    </div>
-                    <h2 id="question-text" class="text-xl sm:text-3xl md:text-4xl font-extrabold text-white leading-snug tracking-wide drop-shadow-md">
-                        กำลังโหลดคำถาม...
-                    </h2>
-                </div>
-            </div>
-
-            <!-- พื้นที่ตัวเลือกซ้าย-ขวา (รองรับทั้ง 1 คน และ 2 คน) -->
-            <!-- โหมด 1 คน: ซ้าย = ใช่, ขวา = ไม่ -->
-            <div id="choices-1p-container" class="w-full flex-1 flex items-center justify-between px-2 sm:px-8 my-auto z-20 gap-4">
-                
-                <!-- ด้านซ้ายของจอ: "ใช่" -->
-                <div id="btn-1p-yes" data-player="1" data-answer="ใช่" class="ar-target choice-card w-36 h-48 sm:w-56 sm:h-72 md:w-64 md:h-80 rounded-3xl bg-emerald-600/80 backdrop-blur-md border-4 border-emerald-300 flex flex-col items-center justify-center shadow-2xl">
-                    <div class="w-14 h-14 sm:w-20 sm:h-20 rounded-full bg-emerald-400/30 flex items-center justify-center mb-2 sm:mb-4">
-                        <span class="text-3xl sm:text-5xl">⭕</span>
-                    </div>
-                    <span class="text-4xl sm:text-6xl font-black text-white drop-shadow-lg">ใช่</span>
-                    <span class="text-xs sm:text-sm text-emerald-100 mt-2 font-medium">ชี้ค้างไว้ 10 วินาทีเพื่อเลือก</span>
-                </div>
-
-                <!-- คำแนะนำตรงกลาง -->
-                <div class="hidden md:flex flex-col items-center text-center max-w-xs opacity-80">
-                    <div class="w-12 h-12 rounded-full border-2 border-blue-400 flex items-center justify-center mb-2 bg-blue-500/20">
-                        <span class="text-2xl">☝️</span>
-                    </div>
-                    <p class="text-sm text-slate-200 font-medium">เลื่อนวงกลมสีน้ำเงินด้วยปลายนิ้วชี้ไปค้างที่ปุ่มซ้ายหรือขวา 10 วินาที</p>
-                </div>
-
-                <!-- ด้านขวาของจอ: "ไม่" -->
-                <div id="btn-1p-no" data-player="1" data-answer="ไม่" class="ar-target choice-card w-36 h-48 sm:w-56 sm:h-72 md:w-64 md:h-80 rounded-3xl bg-rose-600/80 backdrop-blur-md border-4 border-rose-300 flex flex-col items-center justify-center shadow-2xl">
-                    <div class="w-14 h-14 sm:w-20 sm:h-20 rounded-full bg-rose-400/30 flex items-center justify-center mb-2 sm:mb-4">
-                        <span class="text-3xl sm:text-5xl">✖️</span>
-                    </div>
-                    <span class="text-4xl sm:text-6xl font-black text-white drop-shadow-lg">ไม่</span>
-                    <span class="text-xs sm:text-sm text-rose-100 mt-2 font-medium">ชี้ค้างไว้ 10 วินาทีเพื่อเลือก</span>
-                </div>
-            </div>
-
-            <!-- โหมด 2 คน: แบ่งครึ่งจอ ซ้าย (ผู้เล่น 1: ใช่/ไม่) และ ขวา (ผู้เล่น 2: ใช่/ไม่) -->
-            <div id="choices-2p-container" class="hidden w-full flex-1 grid grid-cols-2 gap-4 sm:gap-8 items-center px-1 sm:px-4 my-auto z-20">
-                <!-- ฝั่งผู้เล่น 1 (ซ้าย) -->
-                <div class="flex items-center justify-around gap-2 sm:gap-4 px-2">
-                    <div data-player="1" data-answer="ใช่" class="ar-target-2p choice-card w-28 h-40 sm:w-40 sm:h-56 rounded-3xl bg-emerald-600/85 border-4 border-emerald-300 flex flex-col items-center justify-center shadow-xl">
-                        <span class="text-xs bg-blue-700 px-2 py-0.5 rounded-full mb-1">ผู้เล่น 1</span>
-                        <span class="text-3xl sm:text-5xl font-black text-white">ใช่</span>
-                    </div>
-                    <div data-player="1" data-answer="ไม่" class="ar-target-2p choice-card w-28 h-40 sm:w-40 sm:h-56 rounded-3xl bg-rose-600/85 border-4 border-rose-300 flex flex-col items-center justify-center shadow-xl">
-                        <span class="text-xs bg-blue-700 px-2 py-0.5 rounded-full mb-1">ผู้เล่น 1</span>
-                        <span class="text-3xl sm:text-5xl font-black text-white">ไม่</span>
-                    </div>
-                </div>
-
-                <!-- ฝั่งผู้เล่น 2 (ขวา) -->
-                <div class="flex items-center justify-around gap-2 sm:gap-4 px-2">
-                    <div data-player="2" data-answer="ใช่" class="ar-target-2p choice-card w-28 h-40 sm:w-40 sm:h-56 rounded-3xl bg-emerald-600/85 border-4 border-emerald-300 flex flex-col items-center justify-center shadow-xl">
-                        <span class="text-xs bg-cyan-700 px-2 py-0.5 rounded-full mb-1">ผู้เล่น 2</span>
-                        <span class="text-3xl sm:text-5xl font-black text-white">ใช่</span>
-                    </div>
-                    <div data-player="2" data-answer="ไม่" class="ar-target-2p choice-card w-28 h-40 sm:w-40 sm:h-56 rounded-3xl bg-rose-600/85 border-4 border-rose-300 flex flex-col items-center justify-center shadow-xl">
-                        <span class="text-xs bg-cyan-700 px-2 py-0.5 rounded-full mb-1">ผู้เล่น 2</span>
-                        <span class="text-3xl sm:text-5xl font-black text-white">ไม่</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- กล่องแสดงเฉลยและคำอธิบายหลังตอบคำถาม -->
-            <div id="explanation-banner" class="hidden w-full max-w-4xl mx-auto z-30 mb-2">
-                <div id="explanation-box" class="glass-panel rounded-3xl p-4 sm:p-6 border-2 shadow-2xl text-center transition-all">
-                    <div id="explanation-title" class="text-2xl sm:text-3xl font-black mb-2">ถูกต้อง! 🎉</div>
-                    <p id="explanation-detail" class="text-base sm:text-xl text-slate-100 font-medium leading-relaxed"></p>
-                </div>
-            </div>
-        </section>
-
-        <!-- ================= END SCREEN: หน้าจอสรุปผลเมื่อหมดเวลา 60 วินาที ================= -->
-        <section id="end-screen" class="hidden my-auto mx-auto w-full max-w-2xl glass-panel rounded-3xl p-6 sm:p-10 text-center shadow-2xl border border-amber-400/40 z-30">
-            <div class="text-5xl sm:text-6xl mb-3">🏆</div>
-            <h2 class="text-3xl sm:text-4xl font-extrabold text-amber-300 mb-2">หมดเวลาการแข่งขัน!</h2>
-            <p class="text-slate-300 text-sm sm:text-base mb-6">สรุปผลการเรียนรู้เรื่อง "การปฏิรูปศาสนา"</p>
-
-            <!-- สรุปคะแนนผู้เล่น 1 -->
-            <div class="bg-slate-800/90 rounded-2xl p-5 mb-4 border border-slate-700">
-                <h3 id="end-p1-title" class="text-lg font-bold text-blue-300 mb-2">คะแนนของคุณ</h3>
-                <div class="flex justify-center items-center gap-6 text-2xl sm:text-3xl font-black">
-                    <span class="text-emerald-400">ถูก = <span id="end-p1-correct">0</span> ข้อ</span>
-                    <span class="text-slate-500">|</span>
-                    <span class="text-rose-400">ผิด = <span id="end-p1-wrong">0</span> ข้อ</span>
-                </div>
-            </div>
-
-            <!-- สรุปคะแนนผู้เล่น 2 (ถ้าเลือกโหมด 2 คน) -->
-            <div id="end-p2-box" class="hidden bg-slate-800/90 rounded-2xl p-5 mb-6 border border-slate-700">
-                <h3 class="text-lg font-bold text-cyan-300 mb-2">ผู้เล่นที่ 2 (ฝั่งขวา)</h3>
-                <div class="flex justify-center items-center gap-6 text-2xl sm:text-3xl font-black">
-                    <span class="text-emerald-400">ถูก = <span id="end-p2-correct">0</span> ข้อ</span>
-                    <span class="text-slate-500">|</span>
-                    <span class="text-rose-400">ผิด = <span id="end-p2-wrong">0</span> ข้อ</span>
-                </div>
-            </div>
-
-            <div class="flex flex-col sm:flex-row justify-center gap-4 mt-6">
-                <button onclick="startGame()" class="px-8 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-extrabold text-xl shadow-lg transition">
-                    🔄 เล่นอีกครั้ง (<span id="end-replay-duration">60 วินาที</span>)
-                </button>
-                <button onclick="goToHomeScreen()" class="px-6 py-4 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-lg shadow-lg transition">
-                    🏠 หน้าหลัก
-                </button>
-                <button onclick="openSettingsModal()" class="px-6 py-4 rounded-2xl bg-slate-700 hover:bg-slate-600 text-white font-bold text-lg transition">
-                    ⚙️ ตั้งค่า / เปลี่ยนโหมด
-                </button>
-            </div>
-        </section>
-
-        <!-- Footer เล็กๆ บอกคำแนะนำ -->
-        <footer class="text-center text-xs text-slate-400/80 z-20 pointer-events-none">
-            ควบคุมด้วยปลายนิ้วชี้ผ่านกล้อง (MediaPipe Hands) • วิชาสังคมศึกษา ม.ปลาย
-        </footer>
-    </div>
-
-    <!-- ================= SETTINGS MODAL: หน้าต่างตั้งค่าและนำเข้าไฟล์ Excel ================= -->
-    <div id="settings-modal" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-        <div class="glass-panel w-full max-w-4xl rounded-3xl p-5 sm:p-8 border border-slate-600 shadow-2xl max-h-[92vh] overflow-y-auto text-left">
-            
-            <div class="flex items-center justify-between border-b border-slate-700 pb-4 mb-6">
-                <div>
-                    <h2 class="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-2">
-                        <span>⚙️ หน้าต่างตั้งค่าเกม (Settings)</span>
-                    </h2>
-                    <p class="text-xs sm:text-sm text-slate-300 mt-1">เลือกโหมดผู้เล่น และจัดการคลังข้อสอบด้วยไฟล์ Excel (.xlsx, .csv)</p>
-                </div>
-                <button onclick="closeSettingsModal()" class="p-2 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white transition">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
-                </button>
-            </div>
-
-            <!-- 1. เลือกโหมดการเล่น (1 คน หรือ 2 คน) -->
-            <div class="mb-6">
-                <label class="block text-base sm:text-lg font-bold text-blue-300 mb-3">1. เลือกหมวดหมู่ผู้เล่น</label>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <button id="mode-btn-1p" onclick="setPlayerMode(1)" class="p-4 rounded-2xl border-2 border-blue-500 bg-blue-600/20 text-left transition flex items-start gap-4">
-                        <div class="text-3xl">👤</div>
-                        <div>
-                            <div class="font-extrabold text-lg text-white">เล่นคนเดียว (1 Player)</div>
-                            <p class="text-xs text-slate-300 mt-1">ตรวจจับมือ 1 ข้าง ปุ่ม "ใช่" อยู่ซ้าย และปุ่ม "ไม่" อยู่ขวาของหน้าจอ</p>
-                        </div>
-                    </button>
-
-                    <button id="mode-btn-2p" onclick="setPlayerMode(2)" class="p-4 rounded-2xl border-2 border-slate-700 bg-slate-800/60 text-left transition flex items-start gap-4">
-                        <div class="text-3xl">👥</div>
-                        <div>
-                            <div class="font-extrabold text-lg text-white">เล่น 2 คน (2 Players แข่งขันกัน)</div>
-                            <p class="text-xs text-slate-300 mt-1">แบ่งครึ่งหน้าจอซ้าย-ขวา ตรวจจับมือของผู้เล่น 2 คนพร้อมกัน ใครชี้ตอบถูกก่อนได้คะแนนข้อนั้นไป!</p>
-                        </div>
-                    </button>
-                </div>
-            </div>
-
-            <!-- 2. ตั้งเวลาในการเล่น (1 นาที, 3 นาที, 5 นาที และกำหนดเอง) -->
-            <div class="mb-6 bg-slate-900/90 rounded-2xl p-4 sm:p-6 border border-slate-700">
-                <label class="block text-base sm:text-lg font-bold text-amber-300 mb-3">2. ตั้งเวลาการแข่งขัน</label>
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-                    <button id="time-btn-60" onclick="selectTimePreset(60)" class="p-3 rounded-xl border-2 border-amber-400 bg-amber-500/20 text-center transition">
-                        <div class="text-lg font-extrabold text-white">⏱️ 1 นาที</div>
-                        <div class="text-xs text-amber-200">(60 วินาที)</div>
-                    </button>
-                    <button id="time-btn-180" onclick="selectTimePreset(180)" class="p-3 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-center transition">
-                        <div class="text-lg font-extrabold text-white">⏱️ 3 นาที</div>
-                        <div class="text-xs text-slate-400">(180 วินาที)</div>
-                    </button>
-                    <button id="time-btn-300" onclick="selectTimePreset(300)" class="p-3 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-center transition">
-                        <div class="text-lg font-extrabold text-white">⏱️ 5 นาที</div>
-                        <div class="text-xs text-slate-400">(300 วินาที)</div>
-                    </button>
-                    <button id="time-btn-custom" onclick="selectTimePreset('custom')" class="p-3 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-center transition">
-                        <div class="text-lg font-extrabold text-white">⚙️ กำหนดเอง</div>
-                        <div class="text-xs text-slate-400">(ระบุเวลาเอง)</div>
-                    </button>
-                </div>
-
-                <!-- ช่องกรอกเวลากำหนดเอง -->
-                <div id="custom-time-container" class="hidden mt-3 p-4 rounded-xl bg-slate-800/90 border border-amber-400/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                    <div>
-                        <div class="text-sm font-bold text-amber-200">ระบุเวลาที่ต้องการ (วินาที)</div>
-                        <p class="text-xs text-slate-400">กำหนดได้ตั้งแต่ 10 ถึง 3,600 วินาที (เช่น 90 = 1 นาทีครึ่ง, 120 = 2 นาที)</p>
-                    </div>
-                    <div class="flex items-center gap-2 w-full sm:w-auto">
-                        <input id="custom-time-input" type="number" min="10" max="3600" value="120" oninput="applyCustomTimeInput()" class="w-28 px-3 py-2 rounded-xl bg-slate-900 border border-slate-600 text-white font-extrabold text-center text-lg focus:outline-none focus:border-amber-400">
-                        <span class="text-sm font-bold text-slate-300">วินาที</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 3. ระบบ Import ไฟล์จาก Excel และแสดงวิธีใช้ไฟล์ -->
-            <div class="mb-6 bg-slate-900/90 rounded-2xl p-4 sm:p-6 border border-slate-700">
-                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-                    <div>
-                        <h3 class="text-base sm:text-lg font-bold text-emerald-400">3. นำเข้าคำถามจากไฟล์ Excel (.xlsx, .xls, .csv)</h3>
-                        <p class="text-xs text-slate-300">ครูและนักเรียนสามารถสร้างโจทย์เพิ่มใน Excel แล้วอัปโหลดเข้าสู่เกมได้ทันที</p>
-                    </div>
-                    <button onclick="downloadSampleExcel()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold transition shadow flex items-center gap-2 self-start sm:self-auto">
-                        <span>📥 ดาวน์โหลดไฟล์ Excel ตัวอย่าง</span>
-                    </button>
-                </div>
-
-                <!-- คำแนะนำการใช้งานไฟล์ Excel (แสดงการใช้ไฟล์) -->
-                <div class="bg-slate-800/90 rounded-xl p-4 mb-4 border border-slate-600 text-xs sm:text-sm">
-                    <div class="font-bold text-amber-300 mb-2">📖 วิธีเตรียมและใช้งานไฟล์ Excel (แสดงโครงสร้างไฟล์):</div>
-                    <p class="text-slate-300 mb-2">
-                        ให้สร้างตารางในโปรแกรม Microsoft Excel หรือ Google Sheets โดยมี <strong>3 คอลัมน์ (แถวแรกเป็นหัวตาราง หรือเริ่มข้อมูลตั้งแต่แถวแรกก็ได้)</strong> ดังนี้:
-                    </p>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left border-collapse border border-slate-600 text-xs">
-                            <thead>
-                                <tr class="bg-slate-700 text-amber-200">
-                                    <th class="border border-slate-600 p-2">คอลัมน์ A: คำถาม (Question)</th>
-                                    <th class="border border-slate-600 p-2 w-24">คอลัมน์ B: คำตอบ</th>
-                                    <th class="border border-slate-600 p-2">คอลัมน์ C: คำอธิบาย (Explanation)</th>
-                                </tr>
-                            </thead>
-                            <tbody class="text-slate-200">
-                                <tr>
-                                    <td class="border border-slate-600 p-2">การปฏิรูปศาสนาเริ่มต้นขึ้นใน ค.ศ. 1517...</td>
-                                    <td class="border border-slate-600 p-2 font-bold text-emerald-400">ใช่</td>
-                                    <td class="border border-slate-600 p-2">ลูเทอร์ประกาศ 95 ข้อ ที่โบสถ์วิทเทนแบร์ก...</td>
-                                </tr>
-                                <tr>
-                                    <td class="border border-slate-600 p-2">ผู้จุดชนวนการปฏิรูปศาสนาเป็นชาวฝรั่งเศส</td>
-                                    <td class="border border-slate-600 p-2 font-bold text-rose-400">ไม่</td>
-                                    <td class="border border-slate-600 p-2">มาร์ติน ลูเทอร์ เป็นชาวเยอรมัน...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                    <p class="text-slate-400 mt-2 text-xs">
-                        * หมายเหตุ: ในคอลัมน์คำตอบ สามารถพิมพ์คำว่า <code>ใช่</code>, <code>ไม่ใช่</code>, <code>ไม่</code>, <code>Yes</code>, หรือ <code>No</code> ระบบจะแปลงเป็น "ใช่" หรือ "ไม่" ให้อัตโนมัติ
-                    </p>
-                </div>
-
-                <!-- ปุ่มเลือกไฟล์ Excel -->
-                <div class="flex flex-col sm:flex-row items-center gap-3">
-                    <label class="w-full sm:w-auto cursor-pointer px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition text-center shadow">
-                        <span>📂 เลือกไฟล์ Excel (.xlsx / .csv) เพื่อนำเข้า</span>
-                        <input id="excel-file-input" type="file" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleExcelImport(event)">
-                    </label>
-                    <button onclick="resetDefaultQuestions()" class="w-full sm:w-auto px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs sm:text-sm font-semibold transition">
-                        คืนค่าคำถามเริ่มต้น (5 ข้อ)
-                    </button>
-                    <span id="import-status-msg" class="text-xs sm:text-sm font-semibold text-emerald-400"></span>
-                </div>
-            </div>
-
-            <!-- 4. ตารางแสดงรายการคำถามปัจจุบันในระบบ -->
-            <div class="mb-6">
-                <div class="flex items-center justify-between mb-2">
-                    <h4 class="text-sm sm:text-base font-bold text-slate-200">📋 รายการคำถามที่ใช้งานอยู่ในเกม (<span id="modal-question-count">5</span> ข้อ)</h4>
-                </div>
-                <div class="max-h-48 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900/70">
-                    <table class="w-full text-left border-collapse text-xs">
-                        <thead class="bg-slate-800 text-slate-300 sticky top-0">
-                            <tr>
-                                <th class="p-2.5 border-b border-slate-700 w-10">#</th>
-                                <th class="p-2.5 border-b border-slate-700">คำถาม</th>
-                                <th class="p-2.5 border-b border-slate-700 w-20 text-center">คำตอบ</th>
-                                <th class="p-2.5 border-b border-slate-700">คำอธิบาย</th>
-                            </tr>
-                        </thead>
-                        <tbody id="questions-preview-tbody" class="divide-y divide-slate-800 text-slate-300">
-                            <!-- สร้างด้วย JavaScript -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- ปุ่มบันทึกและปิดหน้าต่าง -->
-            <div class="flex justify-end gap-3 pt-3 border-t border-slate-700">
-                <button onclick="closeSettingsModal()" class="px-8 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-base shadow-lg transition">
-                    ✅ บันทึกและกลับสู่เกม
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- ================= JAVASCRIPT LOGIC ================= -->
-    <script>
-        /**
-         * ============================================================================
-         * 1. คลังข้อมูลคำถามเริ่มต้น (วิชาประวัติศาสตร์ ม.ปลาย เรื่อง การปฏิรูปศาสนา)
-         * ============================================================================
-         */
-        const DEFAULT_QUESTIONS = [
-            {
-                question: "การปฏิรูปศาสนาเริ่มต้นขึ้นใน ค.ศ. 1517 เมื่อมาร์ติน ลูเทอร์ ประกาศ 95 ข้อ เพื่อคัดค้านการขายใบไถ่บาป",
-                answer: "ใช่",
-                explanation: "ลูเทอร์ประกาศ 95 ข้อ (95 Theses) ที่โบสถ์วิทเทนแบร์ก ประเทศเยอรมนี ใน ค.ศ. 1517 ถือเป็นจุดเริ่มต้นของการปฏิรูปศาสนา"
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: 'user',
+                width: { ideal: 640 },
+                height: { ideal: 480 }
             },
-            {
-                question: "ผู้จุดชนวนการปฏิรูปศาสนาเป็นชาวฝรั่งเศส",
-                answer: "ไม่",
-                explanation: "มาร์ติน ลูเทอร์ เป็นชาวเยอรมัน ส่วนฌอง คาลวิน เป็นชาวฝรั่งเศสและเป็นผู้นำปฏิรูปในรุ่นถัดมา"
-            },
-            {
-                question: "คำว่า \"โปรเตสแตนต์\" มีความหมายว่า \"ผู้ประท้วง\"",
-                answer: "ใช่",
-                explanation: "คำนี้มาจากเหตุการณ์ที่เจ้าผู้ครองแคว้นฝ่ายลูเทอร์ประท้วงมติของสภาสไปเออร์ ใน ค.ศ. 1529"
-            },
-            {
-                question: "การขายใบไถ่บาปของคริสตจักรมีจุดประสงค์สำคัญเพื่อหาเงินไปสร้างมหาวิหารเซนต์ปีเตอร์ที่กรุงโรม",
-                answer: "ใช่",
-                explanation: "พระสันตะปาปาลีโอที่ 10 ต้องการเงินสร้างมหาวิหารเซนต์ปีเตอร์ จึงสนับสนุนการขายใบไถ่บาป ซึ่งลูเทอร์มองว่าเป็นการหาผลประโยชน์จากศาสนา"
-            },
-            {
-                question: "นิกายแองกลิกันก่อตั้งโดยมาร์ติน ลูเทอร์",
-                answer: "ไม่",
-                explanation: "นิกายแองกลิกันเกิดจากพระเจ้าเฮนรีที่ 8 แห่งอังกฤษ ผ่านพระราชบัญญัติความเป็นใหญ่ ค.ศ. 1534 ส่วนลูเทอร์ตั้งนิกายลูเทอรัน"
-            }
-        ];
+            audio: false
+        });
 
-        // State ของคลังคำถามและการสุ่ม
-        let questionBank = [...DEFAULT_QUESTIONS];
-        let remainingQuestions = [];
-        let currentQuestion = null;
-
-        // State ของเกม
-        let gameState = {
-            isPlaying: false,
-            isPaused: false,
-            isShowingExplanation: false,
-            playerMode: 1, // 1 = เล่นคนเดียว (ตรวจจับมือ 1 ข้าง), 2 = เล่น 2 คน
-            configuredDuration: 60, // เวลาเริ่มต้น 60 วินาที (1 นาที)
-            timePresetMode: 60, // 60 | 180 | 300 | 'custom'
-            timeLeft: 60,
-            timerInterval: null,
-            scores: {
-                p1: { correct: 0, wrong: 0 },
-                p2: { correct: 0, wrong: 0 }
-            }
-        };
-
-        /**
-         * ============================================================================
-         * 2. ระบบเสียงสังเคราะห์ด้วย Web Audio API (ไม่ต้องใช้ไฟล์เสียงภายนอก)
-         * ============================================================================
-         */
-        let audioCtx = null;
-
-        function initAudio() {
-            if (!audioCtx) {
-                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                audioCtx = new AudioContextClass();
-            }
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-        }
-
-        function playSoundEffect(type) {
-            try {
-                initAudio();
-                const now = audioCtx.currentTime;
-
-                if (type === 'hover') {
-                    // เสียงติ๊กเบาๆ เมื่อเริ่มชี้ปุ่ม
-                    const osc = audioCtx.createOscillator();
-                    const gain = audioCtx.createGain();
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(520, now);
-                    gain.gain.setValueAtTime(0.05, now);
-                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-                    osc.connect(gain);
-                    gain.connect(audioCtx.destination);
-                    osc.start(now);
-                    osc.stop(now + 0.08);
-                } else if (type === 'correct') {
-                    // เสียงสดใสเมื่อตอบถูก
-                    [523.25, 659.25, 783.99, 1046.50].forEach((freq, idx) => {
-                        const osc = audioCtx.createOscillator();
-                        const gain = audioCtx.createGain();
-                        osc.type = 'triangle';
-                        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
-                        gain.gain.setValueAtTime(0.18, now + idx * 0.08);
-                        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.25);
-                        osc.connect(gain);
-                        gain.connect(audioCtx.destination);
-                        osc.start(now + idx * 0.08);
-                        osc.stop(now + idx * 0.08 + 0.25);
-                    });
-                } else if (type === 'wrong') {
-                    // เสียงทุ้มเตือนเมื่อตอบผิด
-                    [300, 220].forEach((freq, idx) => {
-                        const osc = audioCtx.createOscillator();
-                        const gain = audioCtx.createGain();
-                        osc.type = 'sawtooth';
-                        osc.frequency.setValueAtTime(freq, now + idx * 0.15);
-                        gain.gain.setValueAtTime(0.15, now + idx * 0.15);
-                        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.15 + 0.28);
-                        osc.connect(gain);
-                        gain.connect(audioCtx.destination);
-                        osc.start(now + idx * 0.15);
-                        osc.stop(now + idx * 0.15 + 0.28);
-                    });
-                } else if (type === 'gameover') {
-                    // เสียงจบเกม
-                    [440, 554.37, 659.25, 880].forEach((freq, idx) => {
-                        const osc = audioCtx.createOscillator();
-                        const gain = audioCtx.createGain();
-                        osc.type = 'sine';
-                        osc.frequency.setValueAtTime(freq, now + idx * 0.12);
-                        gain.gain.setValueAtTime(0.2, now + idx * 0.12);
-                        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.4);
-                        osc.connect(gain);
-                        gain.connect(audioCtx.destination);
-                        osc.start(now + idx * 0.12);
-                        osc.stop(now + idx * 0.12 + 0.4);
-                    });
-                }
-            } catch (err) {
-                console.warn('Web Audio API error:', err);
-            }
-        }
-
-        /**
-         * ============================================================================
-         * 3. ระบบ Hand Tracking (MediaPipe Hands) + Smoothing + ป้องกัน Double Flip
-         * ============================================================================
-         */
-        const videoElement = document.getElementById('webcam-video');
-        const canvasElement = document.getElementById('ar-canvas');
-        const canvasCtx = canvasElement.getContext('2d');
-
-        let handsDetector = null;
-        let cameraInstance = null;
-        let isCameraReady = false;
-        let isProcessingFrame = false; // ป้องกันการส่งเฟรมซ้อนกันจน MediaPipe ค้าง
-
-        // ข้อมูลเคอร์เซอร์เสมือนสำหรับมือ (รองรับทั้งโหมด 1 ข้าง และ 2 ข้าง)
-        // ใช้ LERP (Linear Interpolation) ทำ Smoothing ลดอาการสั่น
-        const SMOOTHING_FACTOR = 0.32; // ค่าระหว่าง 0.15 - 0.35 ให้ความรู้สึกนุ่มนวลและตอบสนองไว
-        const DWELL_DURATION_MS = 10000; // เวลาชี้ค้างเพื่อเลือกคำตอบ 10 วินาที (10,000 มิลลิวินาที)
-
-        let virtualCursors = [
-            {
-                id: 1,
-                active: false,
-                rawX: window.innerWidth / 2,
-                rawY: window.innerHeight / 2,
-                smoothX: window.innerWidth / 2,
-                smoothY: window.innerHeight / 2,
-                landmarks: null,
-                hoveredElement: null,
-                hoverStartTime: 0,
-                dwellProgress: 0,
-                pulsePhase: 0
-            },
-            {
-                id: 2,
-                active: false,
-                rawX: window.innerWidth / 2,
-                rawY: window.innerHeight / 2,
-                smoothX: window.innerWidth / 2,
-                smoothY: window.innerHeight / 2,
-                landmarks: null,
-                hoveredElement: null,
-                hoverStartTime: 0,
-                dwellProgress: 0,
-                pulsePhase: Math.PI
-            }
-        ];
-
-        // ปรับขนาด Canvas ให้ตรงกับหน้าจอเสมอ (Responsive)
-        function resizeCanvas() {
-            canvasElement.width = window.innerWidth;
-            canvasElement.height = window.innerHeight;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-
-        /**
-         * คำนวณพิกัดจาก MediaPipe Normalized Coordinates (0..1)
-         * ให้ตรงกับวิดีโอที่ใช้ CSS object-fit: cover และ scaleX(-1) (ป้องกัน Double Flip)
-         */
-        function mapNormalizedToScreen(normX, normY) {
-            const sw = window.innerWidth;
-            const sh = window.innerHeight;
-            const vw = videoElement.videoWidth || 1280;
-            const vh = videoElement.videoHeight || 720;
-
-            const screenRatio = sw / sh;
-            const videoRatio = vw / vh;
-
-            let renderW = sw;
-            let renderH = sh;
-            let offsetX = 0;
-            let offsetY = 0;
-
-            if (screenRatio > videoRatio) {
-                renderW = sw;
-                renderH = sw / videoRatio;
-                offsetY = (sh - renderH) / 2;
-            } else {
-                renderH = sh;
-                renderW = sh * videoRatio;
-                offsetX = (sw - renderW) / 2;
-            }
-
-            // พลิกแกน X เพียงครั้งเดียวด้วย (1 - normX) เพื่อให้ตรงกับภาพกระจกของวิดีโอ
-            const mirroredX = 1 - normX;
-            const screenX = mirroredX * renderW + offsetX;
-            const screenY = normY * renderH + offsetY;
-
-            return {
-                x: Math.max(0, Math.min(sw, screenX)),
-                y: Math.max(0, Math.min(sh, screenY))
+        videoElement.srcObject = stream;
+        await new Promise((resolve) => {
+            videoElement.onloadeddata = () => {
+                videoElement.play();
+                resolve();
             };
+        });
+
+        handsDetector = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
+        });
+
+        handsDetector.setOptions({
+            maxNumHands: gameState.playerMode === 1 ? 1 : 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        handsDetector.onResults(onHandsResults);
+
+        if (typeof handsDetector.initialize === 'function') {
+            await handsDetector.initialize();
         }
 
-        /**
-         * เริ่มต้นระบบ MediaPipe Hands และกล้องเว็บแคม
-         */
-        async function initCameraAndHands() {
-            if (isCameraReady) return true;
+        isCameraReady = true;
+        loadingMsg.classList.add('hidden');
 
-            const loadingMsg = document.getElementById('camera-loading-msg');
-            loadingMsg.classList.remove('hidden');
-            loadingMsg.textContent = 'กำลังเปิดกล้องเว็บแคมและโหลดโมเดล AI (MediaPipe Hands)... กรุณารอสักครู่';
-
-            try {
-                // 1. เปิดกล้องด้วย Web Camera API ก่อนเพื่อให้ได้ Stream ภาพพร้อมใช้งาน
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: 'user',
-                        width: { ideal: 640 },
-                        height: { ideal: 480 }
-                    },
-                    audio: false
-                });
-
-                videoElement.srcObject = stream;
-                await new Promise((resolve) => {
-                    videoElement.onloadeddata = () => {
-                        videoElement.play();
-                        resolve();
-                    };
-                });
-
-                // 2. กำหนดค่า MediaPipe Hands (ล็อกเวอร์ชันเพื่อให้โหลดไฟล์ WASM ได้เสถียร)
-                handsDetector = new Hands({
-                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
-                });
-
-                handsDetector.setOptions({
-                    maxNumHands: gameState.playerMode === 1 ? 1 : 2,
-                    modelComplexity: 1,
-                    minDetectionConfidence: 0.5, // ลดลงมาที่ 0.5 เพื่อให้จับมือง่ายขึ้นในสภาพแสงทั่วไป
-                    minTrackingConfidence: 0.5
-                });
-
-                handsDetector.onResults(onHandsResults);
-
-                // บังคับโหลด WASM โมเดลให้เสร็จสมบูรณ์ก่อนเริ่มลูปเกม
-                if (typeof handsDetector.initialize === 'function') {
-                    await handsDetector.initialize();
+        async function processVideoFrame() {
+            if (
+                videoElement.readyState >= 2 &&
+                !videoElement.paused &&
+                handsDetector &&
+                !isProcessingFrame
+            ) {
+                isProcessingFrame = true;
+                try {
+                    await handsDetector.send({ image: videoElement });
+                } catch (frameErr) {
+                    console.warn('MediaPipe frame send warning:', frameErr);
+                } finally {
+                    isProcessingFrame = false;
                 }
-
-                isCameraReady = true;
-                loadingMsg.classList.add('hidden');
-
-                // 3. ลูปส่งภาพเข้า MediaPipe Hands แบบมี Guard ป้องกัน Frame ซ้อนทับกัน
-                async function processVideoFrame() {
-                    if (
-                        videoElement.readyState >= 2 &&
-                        !videoElement.paused &&
-                        handsDetector &&
-                        !isProcessingFrame
-                    ) {
-                        isProcessingFrame = true;
-                        try {
-                            await handsDetector.send({ image: videoElement });
-                        } catch (frameErr) {
-                            console.warn('MediaPipe frame send warning:', frameErr);
-                        } finally {
-                            isProcessingFrame = false;
-                        }
-                    }
-                    requestAnimationFrame(processVideoFrame);
-                }
-                requestAnimationFrame(processVideoFrame);
-
-                // 4. เริ่มลูปวาดเคอร์เซอร์และตรวจจับการชี้ปุ่ม (60 FPS)
-                requestAnimationFrame(renderARLoop);
-
-                return true;
-            } catch (error) {
-                console.error('Camera/MediaPipe initialization error:', error);
-                loadingMsg.textContent = '⚠️ ไม่สามารถเปิดกล้องหรือโหลดโมเดลตรวจจับมือได้ กรุณาอนุญาตการใช้กล้องและตรวจสอบอินเทอร์เน็ต';
-                return false;
             }
+            requestAnimationFrame(processVideoFrame);
+        }
+        requestAnimationFrame(processVideoFrame);
+        requestAnimationFrame(renderARLoop);
+
+        return true;
+    } catch (error) {
+        console.error('Camera/MediaPipe initialization error:', error);
+        loadingMsg.textContent = '⚠️ ไม่สามารถเปิดกล้องหรือโหลดโมเดลตรวจจับมือได้ กรุณาอนุญาตการใช้กล้องและตรวจสอบอินเทอร์เน็ต';
+        return false;
+    }
+}
+
+function onHandsResults(results) {
+    const statusDot = document.getElementById('hand-status-dot');
+    const statusText = document.getElementById('hand-status-text');
+    const landmarksList = results.multiHandLandmarks || [];
+
+    if (landmarksList.length === 0) {
+        virtualCursors[0].active = false;
+        virtualCursors[0].landmarks = null;
+        virtualCursors[1].active = false;
+        virtualCursors[1].landmarks = null;
+        if (statusDot && statusText) {
+            statusDot.className = 'w-3 h-3 rounded-full bg-amber-400 animate-ping';
+            statusText.textContent = 'ชูนิ้วชี้หน้ากล้อง...';
+        }
+        return;
+    }
+
+    if (statusDot && statusText) {
+        statusDot.className = 'w-3 h-3 rounded-full bg-emerald-400';
+        statusText.textContent = gameState.playerMode === 1
+            ? 'ตรวจพบนิ้วชี้แล้ว'
+            : `ตรวจพบ ${landmarksList.length} มือ`;
+    }
+
+    const sw = window.innerWidth;
+
+    if (gameState.playerMode === 1) {
+        const handLandmarks = landmarksList[0];
+        const indexTip = handLandmarks[8];
+        const mapped = mapNormalizedToScreen(indexTip.x, indexTip.y);
+
+        if (!virtualCursors[0].active) {
+            virtualCursors[0].smoothX = mapped.x;
+            virtualCursors[0].smoothY = mapped.y;
         }
 
-        /**
-         * Callback เมื่อ MediaPipe Hands ประมวลผลเสร็จในแต่ละเฟรม
-         * - ใช้ตำแหน่งปลายนิ้วชี้ (Index Finger Tip = Landmark 8)
-         * - ระวัง Double Flip: เนื่องจากวิดีโอถูกกลับด้านด้วย CSS scaleX(-1)
-         *   พิกัด X บนหน้าจอที่ตรงกับทิศทางมือของผู้เล่นจะถูกคำนวณผ่าน mapNormalizedToScreen()
-         */
-        function onHandsResults(results) {
-            const statusDot = document.getElementById('hand-status-dot');
-            const statusText = document.getElementById('hand-status-text');
+        virtualCursors[0].rawX = mapped.x;
+        virtualCursors[0].rawY = mapped.y;
+        virtualCursors[0].landmarks = handLandmarks;
+        virtualCursors[0].active = true;
 
-            const landmarksList = results.multiHandLandmarks || [];
+        virtualCursors[1].active = false;
+        virtualCursors[1].landmarks = null;
+    } else {
+        let p1Found = false;
+        let p2Found = false;
 
-            if (landmarksList.length === 0) {
-                virtualCursors[0].active = false;
-                virtualCursors[0].landmarks = null;
-                virtualCursors[1].active = false;
-                virtualCursors[1].landmarks = null;
-                if (statusDot && statusText) {
-                    statusDot.className = 'w-3 h-3 rounded-full bg-amber-400 animate-ping';
-                    statusText.textContent = 'ชูนิ้วชี้หน้ากล้อง...';
-                }
-                return;
-            }
+        landmarksList.forEach((handLandmarks) => {
+            const indexTip = handLandmarks[8];
+            const mapped = mapNormalizedToScreen(indexTip.x, indexTip.y);
 
-            if (statusDot && statusText) {
-                statusDot.className = 'w-3 h-3 rounded-full bg-emerald-400';
-                statusText.textContent = gameState.playerMode === 1
-                    ? 'ตรวจพบนิ้วชี้แล้ว'
-                    : `ตรวจพบ ${landmarksList.length} มือ`;
-            }
-
-            const sw = window.innerWidth;
-
-            if (gameState.playerMode === 1) {
-                // โหมดเล่นคนเดียว: ใช้มือเพียง 1 ข้าง (Landmark 8 = Index Finger Tip)
-                const handLandmarks = landmarksList[0];
-                const indexTip = handLandmarks[8];
-                const mapped = mapNormalizedToScreen(indexTip.x, indexTip.y);
-
-                // หากเพิ่งตรวจพบมือครั้งแรก ให้ย้าย smoothX/Y ไปที่ตำแหน่งมือทันทีเพื่อไม่ให้เคอร์เซอร์ลอยมาจากมุมจอ
+            if (mapped.x < sw / 2) {
                 if (!virtualCursors[0].active) {
                     virtualCursors[0].smoothX = mapped.x;
                     virtualCursors[0].smoothY = mapped.y;
                 }
-
                 virtualCursors[0].rawX = mapped.x;
                 virtualCursors[0].rawY = mapped.y;
                 virtualCursors[0].landmarks = handLandmarks;
                 virtualCursors[0].active = true;
-
-                virtualCursors[1].active = false;
-                virtualCursors[1].landmarks = null;
+                p1Found = true;
             } else {
-                // โหมดเล่น 2 คน: แยกมือฝั่งซ้าย (ผู้เล่น 1) และฝั่งขวา (ผู้เล่น 2)
-                let p1Found = false;
-                let p2Found = false;
-
-                landmarksList.forEach((handLandmarks) => {
-                    const indexTip = handLandmarks[8];
-                    const mapped = mapNormalizedToScreen(indexTip.x, indexTip.y);
-
-                    if (mapped.x < sw / 2) {
-                        // ครึ่งซ้ายของจอ = ผู้เล่น 1
-                        if (!virtualCursors[0].active) {
-                            virtualCursors[0].smoothX = mapped.x;
-                            virtualCursors[0].smoothY = mapped.y;
-                        }
-                        virtualCursors[0].rawX = mapped.x;
-                        virtualCursors[0].rawY = mapped.y;
-                        virtualCursors[0].landmarks = handLandmarks;
-                        virtualCursors[0].active = true;
-                        p1Found = true;
-                    } else {
-                        // ครึ่งขวาของจอ = ผู้เล่น 2
-                        if (!virtualCursors[1].active) {
-                            virtualCursors[1].smoothX = mapped.x;
-                            virtualCursors[1].smoothY = mapped.y;
-                        }
-                        virtualCursors[1].rawX = mapped.x;
-                        virtualCursors[1].rawY = mapped.y;
-                        virtualCursors[1].landmarks = handLandmarks;
-                        virtualCursors[1].active = true;
-                        p2Found = true;
-                    }
-                });
-
-                if (!p1Found) {
-                    virtualCursors[0].active = false;
-                    virtualCursors[0].landmarks = null;
+                if (!virtualCursors[1].active) {
+                    virtualCursors[1].smoothX = mapped.x;
+                    virtualCursors[1].smoothY = mapped.y;
                 }
-                if (!p2Found) {
-                    virtualCursors[1].active = false;
-                    virtualCursors[1].landmarks = null;
-                }
+                virtualCursors[1].rawX = mapped.x;
+                virtualCursors[1].rawY = mapped.y;
+                virtualCursors[1].landmarks = handLandmarks;
+                virtualCursors[1].active = true;
+                p2Found = true;
             }
+        });
+
+        if (!p1Found) {
+            virtualCursors[0].active = false;
+            virtualCursors[0].landmarks = null;
+        }
+        if (!p2Found) {
+            virtualCursors[1].active = false;
+            virtualCursors[1].landmarks = null;
+        }
+    }
+}
+
+function renderARLoop(timestamp) {
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+    document.querySelectorAll('.ar-target, .ar-target-2p').forEach(el => {
+        el.classList.remove('choice-yes-active', 'choice-no-active');
+    });
+
+    const maxCursors = gameState.playerMode === 1 ? 1 : 2;
+
+    for (let i = 0; i < maxCursors; i++) {
+        const cursor = virtualCursors[i];
+        if (!cursor.active) {
+            cursor.hoveredElement = null;
+            cursor.dwellProgress = 0;
+            continue;
         }
 
-        /**
-         * ลูปหลักสำหรับคำนวณ Smoothing (ลดการสั่น), วาดเคอร์เซอร์วงกลมสีน้ำเงินเรืองแสง,
-         * และตรวจสอบการวางเคอร์เซอร์ทับปุ่ม "ใช่" / "ไม่"
-         */
-        function renderARLoop(timestamp) {
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        cursor.smoothX += (cursor.rawX - cursor.smoothX) * SMOOTHING_FACTOR;
+        cursor.smoothY += (cursor.rawY - cursor.smoothY) * SMOOTHING_FACTOR;
+        cursor.pulsePhase += 0.12;
 
-            // ล้างเอฟเฟกต์ไฮไลต์ของปุ่มทั้งหมดก่อนคำนวณเฟรมปัจจุบัน
-            document.querySelectorAll('.ar-target, .ar-target-2p').forEach(el => {
-                el.classList.remove('choice-yes-active', 'choice-no-active');
-            });
-
-            const maxCursors = gameState.playerMode === 1 ? 1 : 2;
-
-            for (let i = 0; i < maxCursors; i++) {
-                const cursor = virtualCursors[i];
-                if (!cursor.active) {
-                    cursor.hoveredElement = null;
-                    cursor.dwellProgress = 0;
-                    continue;
-                }
-
-                // 1. คำนวณ Smoothing (LERP) เพื่อลดการสั่นของปลายนิ้ว
-                cursor.smoothX += (cursor.rawX - cursor.smoothX) * SMOOTHING_FACTOR;
-                cursor.smoothY += (cursor.rawY - cursor.smoothY) * SMOOTHING_FACTOR;
-                cursor.pulsePhase += 0.12;
-
-                // 2. วาดเส้นแกนนิ้วชี้ (Index Finger Skeleton) บางๆ เพื่อให้เห็นชัดเจนว่าระบบกำลังติดตามนิ้วอยู่
-                if (cursor.landmarks) {
-                    drawIndexFingerGuide(cursor.landmarks);
-                }
-
-                // 3. ตรวจสอบการชนกับปุ่มตัวเลือก หรือปุ่มคำสั่งด้านบน (หยุด / หน้าหลัก)
-                if (gameState.isPlaying || gameState.isPaused) {
-                    checkCursorButtonCollision(cursor, timestamp);
-                } else {
-                    cursor.hoveredElement = null;
-                    cursor.dwellProgress = 0;
-                }
-
-                // 4. วาดเคอร์เซอร์วงกลมสีน้ำเงิน มี Glow และ Animation ที่ปลายนิ้วชี้
-                drawBlueGlowCursor(cursor);
-            }
-
-            requestAnimationFrame(renderARLoop);
+        if (cursor.landmarks) {
+            drawIndexFingerGuide(cursor.landmarks);
         }
 
-        /**
-         * วาดเส้นเชื่อมข้อต่อของนิ้วชี้ (Landmarks 5 -> 6 -> 7 -> 8) เพื่อช่วยให้ผู้เล่นเห็นการเคลื่อนไหวนิ้วชัดเจน
-         */
-        function drawIndexFingerGuide(landmarks) {
-            const indexJoints = [5, 6, 7, 8];
-            canvasCtx.save();
-            canvasCtx.beginPath();
-            indexJoints.forEach((jointIdx, i) => {
-                const pt = mapNormalizedToScreen(landmarks[jointIdx].x, landmarks[jointIdx].y);
-                if (i === 0) canvasCtx.moveTo(pt.x, pt.y);
-                else canvasCtx.lineTo(pt.x, pt.y);
-            });
-            canvasCtx.strokeStyle = 'rgba(96, 165, 250, 0.55)';
-            canvasCtx.lineWidth = 4;
-            canvasCtx.lineCap = 'round';
-            canvasCtx.stroke();
-            canvasCtx.restore();
+        if (gameState.isPlaying || gameState.isPaused) {
+            checkCursorButtonCollision(cursor, timestamp);
+        } else {
+            cursor.hoveredElement = null;
+            cursor.dwellProgress = 0;
         }
 
-        /**
-         * วาดเคอร์เซอร์วงกลมสีน้ำเงิน + Glow + วงแหวนโหลดเมื่อชี้ค้าง
-         */
-        function drawBlueGlowCursor(cursor) {
-            const x = cursor.smoothX;
-            const y = cursor.smoothY;
-            const pulseRadius = 22 + Math.sin(cursor.pulsePhase) * 4;
+        drawBlueGlowCursor(cursor);
+    }
 
-            canvasCtx.save();
+    requestAnimationFrame(renderARLoop);
+}
 
-            // ชั้นนอก: แสง Glow สีน้ำเงินฟุ้งกระจาย
-            const gradient = canvasCtx.createRadialGradient(x, y, 4, x, y, pulseRadius * 2.2);
-            gradient.addColorStop(0, 'rgba(59, 130, 246, 0.95)');
-            gradient.addColorStop(0.5, 'rgba(37, 99, 235, 0.45)');
-            gradient.addColorStop(1, 'rgba(29, 78, 216, 0)');
+function drawIndexFingerGuide(landmarks) {
+    const indexJoints = [5, 6, 7, 8];
+    canvasCtx.save();
+    canvasCtx.beginPath();
+    indexJoints.forEach((jointIdx, i) => {
+        const pt = mapNormalizedToScreen(landmarks[jointIdx].x, landmarks[jointIdx].y);
+        if (i === 0) canvasCtx.moveTo(pt.x, pt.y);
+        else canvasCtx.lineTo(pt.x, pt.y);
+    });
+    canvasCtx.strokeStyle = 'rgba(96, 165, 250, 0.55)';
+    canvasCtx.lineWidth = 4;
+    canvasCtx.lineCap = 'round';
+    canvasCtx.stroke();
+    canvasCtx.restore();
+}
 
-            canvasCtx.beginPath();
-            canvasCtx.arc(x, y, pulseRadius * 2.2, 0, Math.PI * 2);
-            canvasCtx.fillStyle = gradient;
-            canvasCtx.fill();
+function drawBlueGlowCursor(cursor) {
+    const x = cursor.smoothX;
+    const y = cursor.smoothY;
+    const pulseRadius = 22 + Math.sin(cursor.pulsePhase) * 4;
 
-            // วงกลมหลักสีน้ำเงินพร้อมขอบเรืองแสง
-            canvasCtx.shadowColor = '#60a5fa';
-            canvasCtx.shadowBlur = 20;
-            canvasCtx.beginPath();
-            canvasCtx.arc(x, y, pulseRadius, 0, Math.PI * 2);
-            canvasCtx.fillStyle = 'rgba(37, 99, 235, 0.85)';
-            canvasCtx.fill();
-            canvasCtx.lineWidth = 3;
-            canvasCtx.strokeStyle = '#93c5fd';
-            canvasCtx.stroke();
+    canvasCtx.save();
 
-            // จุดศูนย์กลางสีขาวสว่าง
-            canvasCtx.beginPath();
-            canvasCtx.arc(x, y, 6, 0, Math.PI * 2);
-            canvasCtx.fillStyle = '#ffffff';
-            canvasCtx.fill();
+    const gradient = canvasCtx.createRadialGradient(x, y, 4, x, y, pulseRadius * 2.2);
+    gradient.addColorStop(0, 'rgba(59, 130, 246, 0.95)');
+    gradient.addColorStop(0.5, 'rgba(37, 99, 235, 0.45)');
+    gradient.addColorStop(1, 'rgba(29, 78, 216, 0)');
 
-            // หากกำลังชี้ปุ่มคำตอบ ให้วาดวงแหวน Dwell Progress รอบเคอร์เซอร์ พร้อมตัวเลขนับถอยหลัง 10 วินาที
-            if (cursor.dwellProgress > 0) {
-                canvasCtx.shadowBlur = 10;
-                canvasCtx.beginPath();
-                canvasCtx.arc(
-                    x,
-                    y,
-                    pulseRadius + 10,
-                    -Math.PI / 2,
-                    -Math.PI / 2 + (Math.PI * 2 * cursor.dwellProgress)
-                );
-                canvasCtx.lineWidth = 6;
-                canvasCtx.lineCap = 'round';
-                canvasCtx.strokeStyle = '#38bdf8';
-                canvasCtx.stroke();
+    canvasCtx.beginPath();
+    canvasCtx.arc(x, y, pulseRadius * 2.2, 0, Math.PI * 2);
+    canvasCtx.fillStyle = gradient;
+    canvasCtx.fill();
 
-                // แสดงตัวเลขวินาทีที่เหลือขณะชี้ค้าง (10s -> 1s)
-                const remainingSecs = Math.max(1, Math.ceil((1 - cursor.dwellProgress) * (DWELL_DURATION_MS / 1000)));
-                canvasCtx.font = 'bold 14px Prompt';
-                canvasCtx.fillStyle = '#fef08a';
-                canvasCtx.textAlign = 'center';
-                canvasCtx.fillText(`${remainingSecs}s`, x, y + pulseRadius + 24);
+    canvasCtx.shadowColor = '#60a5fa';
+    canvasCtx.shadowBlur = 20;
+    canvasCtx.beginPath();
+    canvasCtx.arc(x, y, pulseRadius, 0, Math.PI * 2);
+    canvasCtx.fillStyle = 'rgba(37, 99, 235, 0.85)';
+    canvasCtx.fill();
+    canvasCtx.lineWidth = 3;
+    canvasCtx.strokeStyle = '#93c5fd';
+    canvasCtx.stroke();
+
+    canvasCtx.beginPath();
+    canvasCtx.arc(x, y, 6, 0, Math.PI * 2);
+    canvasCtx.fillStyle = '#ffffff';
+    canvasCtx.fill();
+
+    // แสดงวงแหวนและตัวเลขนับถอยหลัง 5 วินาที (5s -> 1s)
+    if (cursor.dwellProgress > 0) {
+        canvasCtx.shadowBlur = 10;
+        canvasCtx.beginPath();
+        canvasCtx.arc(
+            x,
+            y,
+            pulseRadius + 10,
+            -Math.PI / 2,
+            -Math.PI / 2 + (Math.PI * 2 * cursor.dwellProgress)
+        );
+        canvasCtx.lineWidth = 6;
+        canvasCtx.lineCap = 'round';
+        canvasCtx.strokeStyle = '#38bdf8';
+        canvasCtx.stroke();
+
+        const remainingSecs = Math.max(1, Math.ceil((1 - cursor.dwellProgress) * (DWELL_DURATION_MS / 1000)));
+        canvasCtx.font = 'bold 14px Prompt';
+        canvasCtx.fillStyle = '#fef08a';
+        canvasCtx.textAlign = 'center';
+        canvasCtx.fillText(`${remainingSecs}s`, x, y + pulseRadius + 24);
+    }
+
+    if (gameState.playerMode === 2) {
+        canvasCtx.shadowBlur = 4;
+        canvasCtx.font = 'bold 14px Prompt';
+        canvasCtx.fillStyle = '#ffffff';
+        canvasCtx.textAlign = 'center';
+        canvasCtx.fillText(`P${cursor.id}`, x, y - pulseRadius - 14);
+    }
+
+    canvasCtx.restore();
+}
+
+function checkCursorButtonCollision(cursor, timestamp) {
+    let matchedTarget = null;
+
+    const hudTargets = document.querySelectorAll('.ar-hud-target');
+    hudTargets.forEach((el) => {
+        if (el.offsetParent === null) return;
+        const rect = el.getBoundingClientRect();
+        if (
+            cursor.smoothX >= rect.left &&
+            cursor.smoothX <= rect.right &&
+            cursor.smoothY >= rect.top &&
+            cursor.smoothY <= rect.bottom
+        ) {
+            matchedTarget = el;
+        }
+    });
+
+    if (!matchedTarget && gameState.isPlaying && !gameState.isPaused && !gameState.isShowingExplanation) {
+        const selector = gameState.playerMode === 1 ? '.ar-target' : '.ar-target-2p';
+        const targets = document.querySelectorAll(selector);
+
+        targets.forEach((el) => {
+            const targetPlayer = parseInt(el.getAttribute('data-player'), 10);
+            if (gameState.playerMode === 2 && targetPlayer !== cursor.id) return;
+
+            const rect = el.getBoundingClientRect();
+            if (
+                cursor.smoothX >= rect.left &&
+                cursor.smoothX <= rect.right &&
+                cursor.smoothY >= rect.top &&
+                cursor.smoothY <= rect.bottom
+            ) {
+                matchedTarget = el;
             }
+        });
+    }
 
-            // ป้ายกำกับผู้เล่นในโหมด 2 คน
-            if (gameState.playerMode === 2) {
-                canvasCtx.shadowBlur = 4;
-                canvasCtx.font = 'bold 14px Prompt';
-                canvasCtx.fillStyle = '#ffffff';
-                canvasCtx.textAlign = 'center';
-                canvasCtx.fillText(`P${cursor.id}`, x, y - pulseRadius - 14);
-            }
-
-            canvasCtx.restore();
+    if (matchedTarget) {
+        const ansType = matchedTarget.getAttribute('data-answer');
+        if (ansType === 'ใช่') {
+            matchedTarget.classList.add('choice-yes-active');
+        } else if (ansType === 'ไม่') {
+            matchedTarget.classList.add('choice-no-active');
         }
 
-        /**
-         * ตรวจสอบว่าเคอร์เซอร์ปลายนิ้วชี้ชนกับปุ่ม "ใช่", "ไม่" หรือปุ่มควบคุมด้านบน ("หยุด", "หน้าหลัก")
-         */
-        function checkCursorButtonCollision(cursor, timestamp) {
-            let matchedTarget = null;
+        if (cursor.hoveredElement !== matchedTarget) {
+            cursor.hoveredElement = matchedTarget;
+            cursor.hoverStartTime = timestamp;
+            cursor.dwellProgress = 0;
+            playSoundEffect('hover');
+        } else {
+            const elapsed = timestamp - cursor.hoverStartTime;
+            cursor.dwellProgress = Math.min(1, elapsed / DWELL_DURATION_MS);
 
-            // 1. ตรวจสอบปุ่มควบคุมด้านบน (หยุด / หน้าหลัก) และปุ่มในหน้าหยุดเกม
-            const hudTargets = document.querySelectorAll('.ar-hud-target');
-            hudTargets.forEach((el) => {
-                // ข้ามปุ่มที่ถูกซ่อนอยู่
-                if (el.offsetParent === null) return;
-                const rect = el.getBoundingClientRect();
-                if (
-                    cursor.smoothX >= rect.left &&
-                    cursor.smoothX <= rect.right &&
-                    cursor.smoothY >= rect.top &&
-                    cursor.smoothY <= rect.bottom
-                ) {
-                    matchedTarget = el;
-                }
-            });
+            if (cursor.dwellProgress >= 1) {
+                const hudAction = matchedTarget.getAttribute('data-hud-action');
+                const selectedAnswer = matchedTarget.getAttribute('data-answer');
+                const playerNum = parseInt(matchedTarget.getAttribute('data-player'), 10);
 
-            // 2. หากไม่ได้ชี้ปุ่มด้านบน และเกมไม่ได้หยุดอยู่ ให้ตรวจสอบปุ่มคำตอบ "ใช่" / "ไม่"
-            if (!matchedTarget && gameState.isPlaying && !gameState.isPaused && !gameState.isShowingExplanation) {
-                const selector = gameState.playerMode === 1 ? '.ar-target' : '.ar-target-2p';
-                const targets = document.querySelectorAll(selector);
-
-                targets.forEach((el) => {
-                    // ในโหมด 2 คน ผู้เล่นต้องชี้ปุ่มฝั่งของตัวเองเท่านั้น
-                    const targetPlayer = parseInt(el.getAttribute('data-player'), 10);
-                    if (gameState.playerMode === 2 && targetPlayer !== cursor.id) return;
-
-                    const rect = el.getBoundingClientRect();
-                    if (
-                        cursor.smoothX >= rect.left &&
-                        cursor.smoothX <= rect.right &&
-                        cursor.smoothY >= rect.top &&
-                        cursor.smoothY <= rect.bottom
-                    ) {
-                        matchedTarget = el;
-                    }
-                });
-            }
-
-            if (matchedTarget) {
-                const ansType = matchedTarget.getAttribute('data-answer');
-                if (ansType === 'ใช่') {
-                    matchedTarget.classList.add('choice-yes-active');
-                } else if (ansType === 'ไม่') {
-                    matchedTarget.classList.add('choice-no-active');
-                }
-
-                if (cursor.hoveredElement !== matchedTarget) {
-                    cursor.hoveredElement = matchedTarget;
-                    cursor.hoverStartTime = timestamp;
-                    cursor.dwellProgress = 0;
-                    playSoundEffect('hover');
-                } else {
-                    const elapsed = timestamp - cursor.hoverStartTime;
-                    cursor.dwellProgress = Math.min(1, elapsed / DWELL_DURATION_MS);
-
-                    // เมื่อชี้ค้างครบเวลา ให้ทำงานตามปุ่มที่ชี้ทันที
-                    if (cursor.dwellProgress >= 1) {
-                        const hudAction = matchedTarget.getAttribute('data-hud-action');
-                        const selectedAnswer = matchedTarget.getAttribute('data-answer');
-                        const playerNum = parseInt(matchedTarget.getAttribute('data-player'), 10);
-
-                        cursor.hoveredElement = null;
-                        cursor.dwellProgress = 0;
-
-                        if (hudAction === 'pause') {
-                            togglePauseGame();
-                        } else if (hudAction === 'home') {
-                            goToHomeScreen();
-                        } else if (selectedAnswer) {
-                            handleAnswerSubmission(playerNum, selectedAnswer);
-                        }
-                    }
-                }
-            } else {
                 cursor.hoveredElement = null;
                 cursor.dwellProgress = 0;
-            }
-        }
 
-        /**
-         * ============================================================================
-         * 4. ระบบจัดการเกม การสุ่มคำถาม การตรวจคำตอบ และการจับเวลา 60 วินาที
-         * ============================================================================
-         */
-
-        // สุ่มลำดับอาร์เรย์ (Fisher-Yates Shuffle)
-        function shuffleArray(arr) {
-            const copy = [...arr];
-            for (let i = copy.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [copy[i], copy[j]] = [copy[j], copy[i]];
-            }
-            return copy;
-        }
-
-        // ดึงคำถามถัดไปแบบสุ่ม และเมื่อสุ่มครบทุกข้อแล้วให้สุ่มใหม่ทันทีตามโจทย์
-        function loadNextRandomQuestion() {
-            if (remainingQuestions.length === 0) {
-                remainingQuestions = shuffleArray(questionBank);
-            }
-            currentQuestion = remainingQuestions.pop();
-
-            const questionTextEl = document.getElementById('question-text');
-            questionTextEl.textContent = currentQuestion.question;
-
-            // ซ่อนกล่องคำอธิบายเฉลย
-            document.getElementById('explanation-banner').classList.add('hidden');
-            gameState.isShowingExplanation = false;
-        }
-
-        // เริ่มเกมเมื่อกดปุ่ม "เริ่มเกม"
-        async function startGame() {
-            initAudio();
-
-            // เปิดกล้องเว็บแคมอัตโนมัติ
-            const camOk = await initCameraAndHands();
-            if (!camOk) return;
-
-            // อัปเดตจำนวนมือใน MediaPipe ตามโหมดผู้เล่น
-            if (handsDetector) {
-                handsDetector.setOptions({
-                    maxNumHands: gameState.playerMode === 1 ? 1 : 2
-                });
-            }
-
-            // รีเซ็ตคะแนนและเวลาตามที่ตั้งค่าไว้
-            gameState.scores.p1 = { correct: 0, wrong: 0 };
-            gameState.scores.p2 = { correct: 0, wrong: 0 };
-            gameState.timeLeft = gameState.configuredDuration;
-            gameState.isPlaying = true;
-            gameState.isPaused = false;
-            gameState.isShowingExplanation = false;
-
-            updatePauseButtonUI();
-            document.getElementById('pause-modal').classList.add('hidden');
-
-            updateScoreBoardUI();
-            document.getElementById('timer-display').textContent = gameState.timeLeft;
-
-            // สลับการแสดงผลหน้าจอ
-            document.getElementById('start-screen').classList.add('hidden');
-            document.getElementById('end-screen').classList.add('hidden');
-            document.getElementById('hud-header').classList.remove('hidden');
-            document.getElementById('gameplay-screen').classList.remove('hidden');
-
-            // ตั้งค่า UI สำหรับโหมด 1 คน หรือ 2 คน
-            setupPlayerModeLayout();
-
-            // สุ่มคำถามข้อแรก
-            remainingQuestions = shuffleArray(questionBank);
-            loadNextRandomQuestion();
-
-            // เริ่มจับเวลาถอยหลัง 60 วินาที
-            if (gameState.timerInterval) clearInterval(gameState.timerInterval);
-            gameState.timerInterval = setInterval(() => {
-                if (!gameState.isPlaying || gameState.isPaused) return;
-                gameState.timeLeft--;
-                document.getElementById('timer-display').textContent = gameState.timeLeft;
-
-                if (gameState.timeLeft <= 0) {
-                    endGame();
+                if (hudAction === 'pause') {
+                    togglePauseGame();
+                } else if (hudAction === 'home') {
+                    goToHomeScreen();
+                } else if (selectedAnswer) {
+                    handleAnswerSubmission(playerNum, selectedAnswer);
                 }
-            }, 1000);
-        }
-
-        /**
-         * ฟังก์ชันสำหรับปุ่ม "หยุด" (Pause / Resume) ด้านบนหน้าเล่นเกม
-         */
-        function togglePauseGame() {
-            // ทำงานเฉพาะตอนอยู่ในหน้าเล่นเกมเท่านั้น
-            const gameplayVisible = !document.getElementById('gameplay-screen').classList.contains('hidden');
-            if (!gameplayVisible || gameState.timeLeft <= 0) return;
-
-            gameState.isPaused = !gameState.isPaused;
-            playSoundEffect('hover');
-
-            const pauseModal = document.getElementById('pause-modal');
-            const pauseTimeRemaining = document.getElementById('pause-time-remaining');
-
-            if (gameState.isPaused) {
-                gameState.isPlaying = false;
-                pauseTimeRemaining.textContent = gameState.timeLeft;
-                pauseModal.classList.remove('hidden');
-            } else {
-                gameState.isPlaying = true;
-                pauseModal.classList.add('hidden');
-            }
-
-            updatePauseButtonUI();
-        }
-
-        function updatePauseButtonUI() {
-            const iconEl = document.getElementById('pause-btn-icon');
-            const textEl = document.getElementById('pause-btn-text');
-            if (!iconEl || !textEl) return;
-
-            if (gameState.isPaused) {
-                iconEl.textContent = '▶️';
-                textEl.textContent = 'เล่นต่อ';
-            } else {
-                iconEl.textContent = '⏸️';
-                textEl.textContent = 'หยุด';
             }
         }
+    } else {
+        cursor.hoveredElement = null;
+        cursor.dwellProgress = 0;
+    }
+}
 
-        /**
-         * ฟังก์ชันสำหรับปุ่ม "หน้าหลัก" (Home) ด้านบนหน้าเล่นเกม
-         * หยุดเวลา ล้างสถานะเกม และกลับไปยังหน้าจอเริ่มต้นอย่างปลอดภัย
-         */
-        function goToHomeScreen() {
-            playSoundEffect('hover');
+/**
+ * 4. ระบบจัดการเกม การสุ่มคำถาม การตรวจคำตอบ และการจับเวลา
+ */
+function shuffleArray(arr) {
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+}
 
-            gameState.isPlaying = false;
-            gameState.isPaused = false;
-            gameState.isShowingExplanation = false;
+function loadNextRandomQuestion() {
+    if (remainingQuestions.length === 0) {
+        remainingQuestions = shuffleArray(questionBank);
+    }
+    currentQuestion = remainingQuestions.pop();
 
-            if (gameState.timerInterval) {
-                clearInterval(gameState.timerInterval);
-                gameState.timerInterval = null;
-            }
+    const questionTextEl = document.getElementById('question-text');
+    questionTextEl.textContent = currentQuestion.question;
 
-            updatePauseButtonUI();
+    document.getElementById('explanation-banner').classList.add('hidden');
+    gameState.isShowingExplanation = false;
+}
 
-            // ซ่อนหน้าจอเกม หน้าหยุด และหน้าจบเกม แล้วแสดงหน้าหลัก
-            document.getElementById('pause-modal').classList.add('hidden');
-            document.getElementById('settings-modal').classList.add('hidden');
-            document.getElementById('hud-header').classList.add('hidden');
-            document.getElementById('gameplay-screen').classList.add('hidden');
-            document.getElementById('end-screen').classList.add('hidden');
-            document.getElementById('start-screen').classList.remove('hidden');
-        }
+async function startGame() {
+    initAudio();
 
-        // ตรวจคำตอบและแสดงคำอธิบายความรู้
-        function handleAnswerSubmission(playerNumber, chosenAnswer) {
-            if (!gameState.isPlaying || gameState.isShowingExplanation || !currentQuestion) return;
+    const camOk = await initCameraAndHands();
+    if (!camOk) return;
 
-            gameState.isShowingExplanation = true;
-            const isCorrect = chosenAnswer === currentQuestion.answer;
-
-            if (playerNumber === 1) {
-                if (isCorrect) gameState.scores.p1.correct++;
-                else gameState.scores.p1.wrong++;
-            } else {
-                if (isCorrect) gameState.scores.p2.correct++;
-                else gameState.scores.p2.wrong++;
-            }
-
-            updateScoreBoardUI();
-            playSoundEffect(isCorrect ? 'correct' : 'wrong');
-
-            // แสดงแบนเนอร์คำอธิบายความรู้
-            const banner = document.getElementById('explanation-banner');
-            const box = document.getElementById('explanation-box');
-            const title = document.getElementById('explanation-title');
-            const detail = document.getElementById('explanation-detail');
-
-            banner.classList.remove('hidden');
-
-            const playerPrefix = gameState.playerMode === 2 ? `[ผู้เล่น ${playerNumber}] ` : '';
-
-            if (isCorrect) {
-                box.className = 'glass-panel rounded-3xl p-4 sm:p-6 border-4 border-emerald-400 bg-emerald-950/85 shadow-2xl text-center';
-                title.className = 'text-2xl sm:text-3xl font-black text-emerald-300 mb-2';
-                title.textContent = `${playerPrefix}ถูกต้อง! (คำตอบคือ "${currentQuestion.answer}") 🎉`;
-            } else {
-                box.className = 'glass-panel rounded-3xl p-4 sm:p-6 border-4 border-rose-400 bg-rose-950/85 shadow-2xl text-center';
-                title.className = 'text-2xl sm:text-3xl font-black text-rose-300 mb-2';
-                title.textContent = `${playerPrefix}ยังไม่ถูก! (คำตอบที่ถูกคือ "${currentQuestion.answer}") 💡`;
-            }
-
-            detail.textContent = `คำอธิบาย: ${currentQuestion.explanation}`;
-
-            // แสดงคำอธิบาย 3.2 วินาที แล้วสุ่มคำถามข้อต่อไปอัตโนมัติ
-            setTimeout(() => {
-                if (gameState.isPlaying) {
-                    loadNextRandomQuestion();
-                }
-            }, 3200);
-        }
-
-        function updateScoreBoardUI() {
-            const p1CorrectEl = document.getElementById('p1-correct');
-            const p1WrongEl = document.getElementById('p1-wrong');
-            const p2CorrectEl = document.getElementById('p2-correct');
-            const p2WrongEl = document.getElementById('p2-wrong');
-
-            if (p1CorrectEl) p1CorrectEl.textContent = gameState.scores.p1.correct;
-            if (p1WrongEl) p1WrongEl.textContent = gameState.scores.p1.wrong;
-            if (p2CorrectEl) p2CorrectEl.textContent = gameState.scores.p2.correct;
-            if (p2WrongEl) p2WrongEl.textContent = gameState.scores.p2.wrong;
-        }
-
-        // จบเกมเมื่อครบ 60 วินาที
-        function endGame() {
-            gameState.isPlaying = false;
-            if (gameState.timerInterval) clearInterval(gameState.timerInterval);
-
-            playSoundEffect('gameover');
-
-            document.getElementById('gameplay-screen').classList.add('hidden');
-            document.getElementById('end-screen').classList.remove('hidden');
-
-            document.getElementById('end-p1-correct').textContent = gameState.scores.p1.correct;
-            document.getElementById('end-p1-wrong').textContent = gameState.scores.p1.wrong;
-
-            const endP2Box = document.getElementById('end-p2-box');
-            const endP1Title = document.getElementById('end-p1-title');
-
-            if (gameState.playerMode === 2) {
-                endP1Title.textContent = 'ผู้เล่นที่ 1 (ฝั่งซ้าย)';
-                endP2Box.classList.remove('hidden');
-                document.getElementById('end-p2-correct').textContent = gameState.scores.p2.correct;
-                document.getElementById('end-p2-wrong').textContent = gameState.scores.p2.wrong;
-            } else {
-                endP1Title.textContent = 'คะแนนรวมของคุณ';
-                endP2Box.classList.add('hidden');
-            }
-        }
-
-        // ปรับคีย์บอร์ดไม่ให้ควบคุมการเล่นเกมตามโจทย์ (ห้ามใช้ Keyboard ควบคุมเกม)
-        window.addEventListener('keydown', (e) => {
-            if (gameState.isPlaying) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-        }, { capture: true });
-
-        /**
-         * ============================================================================
-         * 5. ระบบหน้าต่างตั้งค่า (Settings), สลับโหมด 1-2 คน, และนำเข้าไฟล์ Excel
-         * ============================================================================
-         */
-        function openSettingsModal() {
-            // หยุดเวลาชั่วคราวหากเปิดหน้าตั้งค่าระหว่างเล่น
-            if (gameState.isPlaying) {
-                gameState.isPlaying = false;
-            }
-            renderQuestionsPreviewTable();
-            document.getElementById('settings-modal').classList.remove('hidden');
-        }
-
-        function closeSettingsModal() {
-            document.getElementById('settings-modal').classList.add('hidden');
-            // หากอยู่ในหน้าเกมและเวลายังเหลือ ให้เล่นต่อได้
-            const gameplayVisible = !document.getElementById('gameplay-screen').classList.contains('hidden');
-            if (gameplayVisible && gameState.timeLeft > 0) {
-                gameState.isPlaying = true;
-            }
-        }
-
-        function setPlayerMode(mode) {
-            gameState.playerMode = mode;
-
-            const btn1p = document.getElementById('mode-btn-1p');
-            const btn2p = document.getElementById('mode-btn-2p');
-            const modeLabel = document.getElementById('current-mode-label');
-
-            if (mode === 1) {
-                btn1p.className = 'p-4 rounded-2xl border-2 border-blue-500 bg-blue-600/20 text-left transition flex items-start gap-4';
-                btn2p.className = 'p-4 rounded-2xl border-2 border-slate-700 bg-slate-800/60 text-left transition flex items-start gap-4';
-                modeLabel.textContent = 'เล่นคนเดียว (1P)';
-            } else {
-                btn2p.className = 'p-4 rounded-2xl border-2 border-cyan-400 bg-cyan-600/20 text-left transition flex items-start gap-4';
-                btn1p.className = 'p-4 rounded-2xl border-2 border-slate-700 bg-slate-800/60 text-left transition flex items-start gap-4';
-                modeLabel.textContent = 'เล่น 2 คน (2P)';
-            }
-
-            if (handsDetector) {
-                handsDetector.setOptions({
-                    maxNumHands: mode === 1 ? 1 : 2
-                });
-            }
-
-            setupPlayerModeLayout();
-        }
-
-        /**
-         * ฟังก์ชันเลือกตั้งเวลาการเล่น (1 นาที, 3 นาที, 5 นาที หรือ กำหนดเอง)
-         */
-        function selectTimePreset(preset) {
-            gameState.timePresetMode = preset;
-            const customContainer = document.getElementById('custom-time-container');
-
-            if (preset === 'custom') {
-                customContainer.classList.remove('hidden');
-                applyCustomTimeInput();
-            } else {
-                customContainer.classList.add('hidden');
-                gameState.configuredDuration = Number(preset);
-                updateDurationLabelsUI();
-            }
-
-            // อัปเดตสไตล์ของปุ่มตั้งเวลาทั้ง 4 ปุ่ม
-            const presets = [60, 180, 300, 'custom'];
-            presets.forEach((p) => {
-                const btn = document.getElementById(`time-btn-${p}`);
-                if (!btn) return;
-                if (p === preset) {
-                    btn.className = 'p-3 rounded-xl border-2 border-amber-400 bg-amber-500/20 text-center transition';
-                } else {
-                    btn.className = 'p-3 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-center transition';
-                }
-            });
-        }
-
-        /**
-         * อ่านค่าและตรวจสอบความถูกต้องของเวลากำหนดเอง (Sanitize & Clamp: 10 - 3600 วินาที)
-         */
-        function applyCustomTimeInput() {
-            const inputEl = document.getElementById('custom-time-input');
-            if (!inputEl) return;
-
-            let rawSeconds = parseInt(inputEl.value, 10);
-            if (isNaN(rawSeconds) || rawSeconds < 10) {
-                rawSeconds = 10;
-            } else if (rawSeconds > 3600) {
-                rawSeconds = 3600;
-            }
-
-            gameState.configuredDuration = rawSeconds;
-            updateDurationLabelsUI();
-        }
-
-        /**
-         * อัปเดตป้ายบอกเวลาในหน้าแรก หน้าจบเกม และนาฬิกาเมื่อยังไม่ได้เริ่มเกม
-         */
-        function updateDurationLabelsUI() {
-            const secs = gameState.configuredDuration;
-            const startLabel = document.getElementById('start-duration-label');
-            const endReplayLabel = document.getElementById('end-replay-duration');
-            const timerDisplay = document.getElementById('timer-display');
-
-            let readableText = `${secs} วินาที`;
-            if (secs % 60 === 0) {
-                const mins = secs / 60;
-                readableText = `${mins} นาที (${secs} วินาที)`;
-            }
-
-            if (startLabel) startLabel.textContent = readableText;
-            if (endReplayLabel) endReplayLabel.textContent = `${secs} วินาที`;
-            if (!gameState.isPlaying && !gameState.isPaused && timerDisplay) {
-                timerDisplay.textContent = secs;
-            }
-        }
-
-        function setupPlayerModeLayout() {
-            const p1Badge = document.getElementById('p1-badge');
-            const p2ScorePanel = document.getElementById('p2-score-panel');
-            const choices1P = document.getElementById('choices-1p-container');
-            const choices2P = document.getElementById('choices-2p-container');
-            const divider = document.getElementById('two-player-divider');
-
-            if (gameState.playerMode === 1) {
-                p1Badge.textContent = 'คะแนน';
-                p2ScorePanel.classList.add('hidden');
-                choices1P.classList.remove('hidden');
-                choices2P.classList.add('hidden');
-                divider.classList.add('hidden');
-            } else {
-                p1Badge.textContent = 'ผู้เล่น 1 (ซ้าย)';
-                p2ScorePanel.classList.remove('hidden');
-                choices1P.classList.add('hidden');
-                choices2P.classList.remove('hidden');
-                divider.classList.remove('hidden');
-            }
-        }
-
-        /**
-         * แปลงค่าคำตอบจาก Excel ให้เป็น "ใช่" หรือ "ไม่"
-         */
-        function normalizeYesNoAnswer(rawVal) {
-            const str = String(rawVal || '').trim().toLowerCase();
-            if (['ใช่', 'yes', 'y', 'true', 'ถูก', '1'].includes(str)) {
-                return 'ใช่';
-            }
-            if (['ไม่', 'ไม่ใช่', 'no', 'n', 'false', 'ผิด', '0'].includes(str)) {
-                return 'ไม่';
-            }
-            return null;
-        }
-
-        /**
-         * อ่านไฟล์ Excel (.xlsx, .xls, .csv) ด้วย SheetJS
-         */
-        function handleExcelImport(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const statusMsg = document.getElementById('import-status-msg');
-            statusMsg.className = 'text-xs sm:text-sm font-semibold text-amber-300';
-            statusMsg.textContent = 'กำลังอ่านไฟล์ Excel...';
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const data = new Uint8Array(e.target.result);
-                    const workbook = XLSX.read(data, { type: 'array' });
-                    const firstSheetName = workbook.SheetNames[0];
-                    const worksheet = workbook.Sheets[firstSheetName];
-
-                    // แปลงเป็นอาร์เรย์ 2 มิติ
-                    const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
-                    const importedQuestions = [];
-
-                    rows.forEach((row, index) => {
-                        if (!row || row.length < 2) return;
-                        const qText = String(row[0] || '').trim();
-                        const rawAns = String(row[1] || '').trim();
-                        const expText = String(row[2] || '').trim();
-
-                        // ข้ามแถวหัวตาราง (Header Row)
-                        if (index === 0 && (qText.includes('คำถาม') || qText.toLowerCase().includes('question'))) {
-                            return;
-                        }
-
-                        const normalizedAns = normalizeYesNoAnswer(rawAns);
-                        if (qText && normalizedAns) {
-                            importedQuestions.push({
-                                question: qText,
-                                answer: normalizedAns,
-                                explanation: expText || `เฉลยคือ "${normalizedAns}"`
-                            });
-                        }
-                    });
-
-                    if (importedQuestions.length > 0) {
-                        questionBank = importedQuestions;
-                        remainingQuestions = shuffleArray(questionBank);
-                        renderQuestionsPreviewTable();
-
-                        statusMsg.className = 'text-xs sm:text-sm font-semibold text-emerald-400';
-                        statusMsg.textContent = `✅ นำเข้าสำเร็จ ${importedQuestions.length} ข้อ!`;
-                    } else {
-                        statusMsg.className = 'text-xs sm:text-sm font-semibold text-rose-400';
-                        statusMsg.textContent = '⚠️ ไม่พบข้อมูลที่ตรงรูปแบบ กรุณาตรวจสอบคอลัมน์ A (คำถาม) และ B (ใช่/ไม่)';
-                    }
-                } catch (err) {
-                    console.error('Excel parse error:', err);
-                    statusMsg.className = 'text-xs sm:text-sm font-semibold text-rose-400';
-                    statusMsg.textContent = '❌ เกิดข้อผิดพลาดในการอ่านไฟล์ Excel';
-                }
-            };
-            reader.readAsArrayBuffer(file);
-        }
-
-        /**
-         * ดาวน์โหลดไฟล์ Excel ตัวอย่าง (.xlsx) เพื่อให้ครูหรือผู้เล่นนำไปแก้ไขต่อได้ทันที
-         */
-        function downloadSampleExcel() {
-            const wsData = [
-                ["คำถาม", "คำตอบ", "คำอธิบาย"],
-                ...DEFAULT_QUESTIONS.map(q => [q.question, q.answer, q.explanation])
-            ];
-
-            const wb = XLSX.utils.book_new();
-            const ws = XLSX.utils.aoa_to_sheet(wsData);
-            XLSX.utils.book_append_sheet(wb, ws, "Questions");
-            XLSX.writeFile(wb, "ตัวอย่างข้อสอบ_การปฏิรูปศาสนา.xlsx");
-        }
-
-        function resetDefaultQuestions() {
-            questionBank = [...DEFAULT_QUESTIONS];
-            remainingQuestions = shuffleArray(questionBank);
-            renderQuestionsPreviewTable();
-
-            const statusMsg = document.getElementById('import-status-msg');
-            statusMsg.className = 'text-xs sm:text-sm font-semibold text-blue-300';
-            statusMsg.textContent = '🔄 คืนค่าคำถามเริ่มต้น 5 ข้อเรียบร้อยแล้ว';
-        }
-
-        function renderQuestionsPreviewTable() {
-            const tbody = document.getElementById('questions-preview-tbody');
-            const countModal = document.getElementById('modal-question-count');
-            const countStart = document.getElementById('question-count-label');
-
-            countModal.textContent = questionBank.length;
-            countStart.textContent = questionBank.length;
-
-            tbody.innerHTML = '';
-            questionBank.forEach((item, idx) => {
-                const tr = document.createElement('tr');
-                tr.className = 'hover:bg-slate-800/60';
-                const badgeColor = item.answer === 'ใช่'
-                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                    : 'bg-rose-500/20 text-rose-300 border-rose-500/40';
-
-                tr.innerHTML = `
-                    <td class="p-2.5 font-bold text-slate-400">${idx + 1}</td>
-                    <td class="p-2.5 text-white font-medium">${item.question}</td>
-                    <td class="p-2.5 text-center">
-                        <span class="px-2.5 py-0.5 rounded-full text-xs font-bold border ${badgeColor}">${item.answer}</span>
-                    </td>
-                    <td class="p-2.5 text-slate-300">${item.explanation}</td>
-                `;
-                tbody.appendChild(tr);
-            });
-        }
-
-        // โหลดตารางตัวอย่างคำถามเมื่อเปิดหน้าเว็บครั้งแรก
-        window.addEventListener('DOMContentLoaded', () => {
-            renderQuestionsPreviewTable();
+    if (handsDetector) {
+        handsDetector.setOptions({
+            maxNumHands: gameState.playerMode === 1 ? 1 : 2
         });
-    </script>
-</body>
-</html>
+    }
+
+    gameState.scores.p1 = { correct: 0, wrong: 0 };
+    gameState.scores.p2 = { correct: 0, wrong: 0 };
+    gameState.timeLeft = gameState.configuredDuration;
+    gameState.isPlaying = true;
+    gameState.isPaused = false;
+    gameState.isShowingExplanation = false;
+
+    updatePauseButtonUI();
+    document.getElementById('pause-modal').classList.add('hidden');
+
+    updateScoreBoardUI();
+    document.getElementById('timer-display').textContent = gameState.timeLeft;
+
+    document.getElementById('start-screen').classList.add('hidden');
+    document.getElementById('end-screen').classList.add('hidden');
+    document.getElementById('hud-header').classList.remove('hidden');
+    document.getElementById('gameplay-screen').classList.remove('hidden');
+
+    setupPlayerModeLayout();
+
+    remainingQuestions = shuffleArray(questionBank);
+    loadNextRandomQuestion();
+
+    if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+    gameState.timerInterval = setInterval(() => {
+        if (!gameState.isPlaying || gameState.isPaused) return;
+        gameState.timeLeft--;
+        document.getElementById('timer-display').textContent = gameState.timeLeft;
+
+        if (gameState.timeLeft <= 0) {
+            endGame();
+        }
+    }, 1000);
+}
+
+function togglePauseGame() {
+    const gameplayVisible = !document.getElementById('gameplay-screen').classList.contains('hidden');
+    if (!gameplayVisible || gameState.timeLeft <= 0) return;
+
+    gameState.isPaused = !gameState.isPaused;
+    playSoundEffect('hover');
+
+    const pauseModal = document.getElementById('pause-modal');
+    const pauseTimeRemaining = document.getElementById('pause-time-remaining');
+
+    if (gameState.isPaused) {
+        gameState.isPlaying = false;
+        pauseTimeRemaining.textContent = gameState.timeLeft;
+        pauseModal.classList.remove('hidden');
+    } else {
+        gameState.isPlaying = true;
+        pauseModal.classList.add('hidden');
+    }
+
+    updatePauseButtonUI();
+}
+
+function updatePauseButtonUI() {
+    const iconEl = document.getElementById('pause-btn-icon');
+    const textEl = document.getElementById('pause-btn-text');
+    if (!iconEl || !textEl) return;
+
+    if (gameState.isPaused) {
+        iconEl.textContent = '▶️';
+        textEl.textContent = 'เล่นต่อ';
+    } else {
+        iconEl.textContent = '⏸️';
+        textEl.textContent = 'หยุด';
+    }
+}
+
+function goToHomeScreen() {
+    playSoundEffect('hover');
+
+    gameState.isPlaying = false;
+    gameState.isPaused = false;
+    gameState.isShowingExplanation = false;
+
+    if (gameState.timerInterval) {
+        clearInterval(gameState.timerInterval);
+        gameState.timerInterval = null;
+    }
+
+    updatePauseButtonUI();
+
+    document.getElementById('pause-modal').classList.add('hidden');
+    document.getElementById('settings-modal').classList.add('hidden');
+    document.getElementById('hud-header').classList.add('hidden');
+    document.getElementById('gameplay-screen').classList.add('hidden');
+    document.getElementById('end-screen').classList.add('hidden');
+    document.getElementById('start-screen').classList.remove('hidden');
+}
+
+function handleAnswerSubmission(playerNumber, chosenAnswer) {
+    if (!gameState.isPlaying || gameState.isShowingExplanation || !currentQuestion) return;
+
+    gameState.isShowingExplanation = true;
+    const isCorrect = chosenAnswer === currentQuestion.answer;
+
+    if (playerNumber === 1) {
+        if (isCorrect) gameState.scores.p1.correct++;
+        else gameState.scores.p1.wrong++;
+    } else {
+        if (isCorrect) gameState.scores.p2.correct++;
+        else gameState.scores.p2.wrong++;
+    }
+
+    updateScoreBoardUI();
+    playSoundEffect(isCorrect ? 'correct' : 'wrong');
+
+    const banner = document.getElementById('explanation-banner');
+    const box = document.getElementById('explanation-box');
+    const title = document.getElementById('explanation-title');
+    const detail = document.getElementById('explanation-detail');
+
+    banner.classList.remove('hidden');
+
+    const playerPrefix = gameState.playerMode === 2 ? `[ผู้เล่น ${playerNumber}] ` : '';
+
+    if (isCorrect) {
+        box.className = 'glass-panel rounded-3xl p-4 sm:p-6 border-4 border-emerald-400 bg-emerald-950/85 shadow-2xl text-center';
+        title.className = 'text-2xl sm:text-3xl font-black text-emerald-300 mb-2';
+        title.textContent = `${playerPrefix}ถูกต้อง! (คำตอบคือ "${currentQuestion.answer}") 🎉`;
+    } else {
+        box.className = 'glass-panel rounded-3xl p-4 sm:p-6 border-4 border-rose-400 bg-rose-950/85 shadow-2xl text-center';
+        title.className = 'text-2xl sm:text-3xl font-black text-rose-300 mb-2';
+        title.textContent = `${playerPrefix}ยังไม่ถูก! (คำตอบที่ถูกคือ "${currentQuestion.answer}") 💡`;
+    }
+
+    detail.textContent = `คำอธิบาย: ${currentQuestion.explanation}`;
+
+    setTimeout(() => {
+        if (gameState.isPlaying) {
+            loadNextRandomQuestion();
+        }
+    }, 3200);
+}
+
+function updateScoreBoardUI() {
+    const p1CorrectEl = document.getElementById('p1-correct');
+    const p1WrongEl = document.getElementById('p1-wrong');
+    const p2CorrectEl = document.getElementById('p2-correct');
+    const p2WrongEl = document.getElementById('p2-wrong');
+
+    if (p1CorrectEl) p1CorrectEl.textContent = gameState.scores.p1.correct;
+    if (p1WrongEl) p1WrongEl.textContent = gameState.scores.p1.wrong;
+    if (p2CorrectEl) p2CorrectEl.textContent = gameState.scores.p2.correct;
+    if (p2WrongEl) p2WrongEl.textContent = gameState.scores.p2.wrong;
+}
+
+function endGame() {
+    gameState.isPlaying = false;
+    if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+
+    playSoundEffect('gameover');
+
+    document.getElementById('gameplay-screen').classList.add('hidden');
+    document.getElementById('end-screen').classList.remove('hidden');
+
+    document.getElementById('end-p1-correct').textContent = gameState.scores.p1.correct;
+    document.getElementById('end-p1-wrong').textContent = gameState.scores.p1.wrong;
+
+    const endP2Box = document.getElementById('end-p2-box');
+    const endP1Title = document.getElementById('end-p1-title');
+
+    if (gameState.playerMode === 2) {
+        endP1Title.textContent = 'ผู้เล่นที่ 1 (ฝั่งซ้าย)';
+        endP2Box.classList.remove('hidden');
+        document.getElementById('end-p2-correct').textContent = gameState.scores.p2.correct;
+        document.getElementById('end-p2-wrong').textContent = gameState.scores.p2.wrong;
+    } else {
+        endP1Title.textContent = 'คะแนนรวมของคุณ';
+        endP2Box.classList.add('hidden');
+    }
+}
+
+// ปิดกั้นการใช้คีย์บอร์ดระหว่างเล่นเกม
+window.addEventListener('keydown', (e) => {
+    if (gameState.isPlaying) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+}, { capture: true });
+
+/**
+ * 5. ระบบหน้าต่างตั้งค่า (Settings), สลับโหมด 1-2 คน, ตั้งเวลา และนำเข้าไฟล์ Excel
+ */
+function openSettingsModal() {
+    if (gameState.isPlaying) {
+        gameState.isPlaying = false;
+    }
+    renderQuestionsPreviewTable();
+    document.getElementById('settings-modal').classList.remove('hidden');
+}
+
+function closeSettingsModal() {
+    document.getElementById('settings-modal').classList.add('hidden');
+    const gameplayVisible = !document.getElementById('gameplay-screen').classList.contains('hidden');
+    if (gameplayVisible && gameState.timeLeft > 0) {
+        gameState.isPlaying = true;
+    }
+}
+
+function setPlayerMode(mode) {
+    gameState.playerMode = mode;
+
+    const btn1p = document.getElementById('mode-btn-1p');
+    const btn2p = document.getElementById('mode-btn-2p');
+    const modeLabel = document.getElementById('current-mode-label');
+
+    if (mode === 1) {
+        btn1p.className = 'p-4 rounded-2xl border-2 border-blue-500 bg-blue-600/20 text-left transition flex items-start gap-4';
+        btn2p.className = 'p-4 rounded-2xl border-2 border-slate-700 bg-slate-800/60 text-left transition flex items-start gap-4';
+        modeLabel.textContent = 'เล่นคนเดียว (1P)';
+    } else {
+        btn2p.className = 'p-4 rounded-2xl border-2 border-cyan-400 bg-cyan-600/20 text-left transition flex items-start gap-4';
+        btn1p.className = 'p-4 rounded-2xl border-2 border-slate-700 bg-slate-800/60 text-left transition flex items-start gap-4';
+        modeLabel.textContent = 'เล่น 2 คน (2P)';
+    }
+
+    if (handsDetector) {
+        handsDetector.setOptions({
+            maxNumHands: mode === 1 ? 1 : 2
+        });
+    }
+
+    setupPlayerModeLayout();
+}
+
+function selectTimePreset(preset) {
+    gameState.timePresetMode = preset;
+    const customContainer = document.getElementById('custom-time-container');
+
+    if (preset === 'custom') {
+        customContainer.classList.remove('hidden');
+        applyCustomTimeInput();
+    } else {
+        customContainer.classList.add('hidden');
+        gameState.configuredDuration = Number(preset);
+        updateDurationLabelsUI();
+    }
+
+    const presets = [60, 180, 300, 'custom'];
+    presets.forEach((p) => {
+        const btn = document.getElementById(`time-btn-${p}`);
+        if (!btn) return;
+        if (p === preset) {
+            btn.className = 'p-3 rounded-xl border-2 border-amber-400 bg-amber-500/20 text-center transition';
+        } else {
+            btn.className = 'p-3 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-center transition';
+        }
+    });
+}
+
+function applyCustomTimeInput() {
+    const inputEl = document.getElementById('custom-time-input');
+    if (!inputEl) return;
+
+    let rawSeconds = parseInt(inputEl.value, 10);
+    if (isNaN(rawSeconds) || rawSeconds < 10) {
+        rawSeconds = 10;
+    } else if (rawSeconds > 3600) {
+        rawSeconds = 3600;
+    }
+
+    gameState.configuredDuration = rawSeconds;
+    updateDurationLabelsUI();
+}
+
+function updateDurationLabelsUI() {
+    const secs = gameState.configuredDuration;
+    const startLabel = document.getElementById('start-duration-label');
+    const endReplayLabel = document.getElementById('end-replay-duration');
+    const timerDisplay = document.getElementById('timer-display');
+
+    let readableText = `${secs} วินาที`;
+    if (secs % 60 === 0) {
+        const mins = secs / 60;
+        readableText = `${mins} นาที (${secs} วินาที)`;
+    }
+
+    if (startLabel) startLabel.textContent = readableText;
+    if (endReplayLabel) endReplayLabel.textContent = `${secs} วินาที`;
+    if (!gameState.isPlaying && !gameState.isPaused && timerDisplay) {
+        timerDisplay.textContent = secs;
+    }
+}
+
+function setupPlayerModeLayout() {
+    const p1Badge = document.getElementById('p1-badge');
+    const p2ScorePanel = document.getElementById('p2-score-panel');
+    const choices1P = document.getElementById('choices-1p-container');
+    const choices2P = document.getElementById('choices-2p-container');
+    const divider = document.getElementById('two-player-divider');
+
+    if (gameState.playerMode === 1) {
+        p1Badge.textContent = 'คะแนน';
+        p2ScorePanel.classList.add('hidden');
+        choices1P.classList.remove('hidden');
+        choices2P.classList.add('hidden');
+        divider.classList.add('hidden');
+    } else {
+        p1Badge.textContent = 'ผู้เล่น 1 (ซ้าย)';
+        p2ScorePanel.classList.remove('hidden');
+        choices1P.classList.add('hidden');
+        choices2P.classList.remove('hidden');
+        divider.classList.remove('hidden');
+    }
+}
+
+function normalizeYesNoAnswer(rawVal) {
+    const str = String(rawVal || '').trim().toLowerCase();
+    if (['ใช่', 'yes', 'y', 'true', 'ถูก', '1'].includes(str)) {
+        return 'ใช่';
+    }
+    if (['ไม่', 'ไม่ใช่', 'no', 'n', 'false', 'ผิด', '0'].includes(str)) {
+        return 'ไม่';
+    }
+    return null;
+}
+
+function handleExcelImport(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const statusMsg = document.getElementById('import-status-msg');
+    statusMsg.className = 'text-xs sm:text-sm font-semibold text-amber-300';
+    statusMsg.textContent = 'กำลังอ่านไฟล์ Excel...';
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[firstSheetName];
+
+            const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+            const importedQuestions = [];
+
+            rows.forEach((row, index) => {
+                if (!row || row.length < 2) return;
+                const qText = String(row[0] || '').trim();
+                const rawAns = String(row[1] || '').trim();
+                const expText = String(row[2] || '').trim();
+
+                if (index === 0 && (qText.includes('คำถาม') || qText.toLowerCase().includes('question'))) {
+                    return;
+                }
+
+                const normalizedAns = normalizeYesNoAnswer(rawAns);
+                if (qText && normalizedAns) {
+                    importedQuestions.push({
+                        question: qText,
+                        answer: normalizedAns,
+                        explanation: expText || `เฉลยคือ "${normalizedAns}"`
+                    });
+                }
+            });
+
+            if (importedQuestions.length > 0) {
+                questionBank = importedQuestions;
+                remainingQuestions = shuffleArray(questionBank);
+                renderQuestionsPreviewTable();
+
+                statusMsg.className = 'text-xs sm:text-sm font-semibold text-emerald-400';
+                statusMsg.textContent = `✅ นำเข้าสำเร็จ ${importedQuestions.length} ข้อ!`;
+            } else {
+                statusMsg.className = 'text-xs sm:text-sm font-semibold text-rose-400';
+                statusMsg.textContent = '⚠️ ไม่พบข้อมูลที่ตรงรูปแบบ กรุณาตรวจสอบคอลัมน์ A (คำถาม) และ B (ใช่/ไม่)';
+            }
+        } catch (err) {
+            console.error('Excel parse error:', err);
+            statusMsg.className = 'text-xs sm:text-sm font-semibold text-rose-400';
+            statusMsg.textContent = '❌ เกิดข้อผิดพลาดในการอ่านไฟล์ Excel';
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+function downloadSampleExcel() {
+    const wsData = [
+        ["คำถาม", "คำตอบ", "คำอธิบาย"],
+        ...DEFAULT_QUESTIONS.map(q => [q.question, q.answer, q.explanation])
+    ];
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    XLSX.utils.book_append_sheet(wb, ws, "Questions");
+    XLSX.writeFile(wb, "ตัวอย่างข้อสอบ_การปฏิรูปศาสนา.xlsx");
+}
+
+function resetDefaultQuestions() {
+    questionBank = [...DEFAULT_QUESTIONS];
+    remainingQuestions = shuffleArray(questionBank);
+    renderQuestionsPreviewTable();
+
+    const statusMsg = document.getElementById('import-status-msg');
+    statusMsg.className = 'text-xs sm:text-sm font-semibold text-blue-300';
+    statusMsg.textContent = '🔄 คืนค่าคำถามเริ่มต้น 5 ข้อเรียบร้อยแล้ว';
+}
+
+function renderQuestionsPreviewTable() {
+    const tbody = document.getElementById('questions-preview-tbody');
+    const countModal = document.getElementById('modal-question-count');
+    const countStart = document.getElementById('question-count-label');
+
+    if (!tbody || !countModal || !countStart) return;
+
+    countModal.textContent = questionBank.length;
+    countStart.textContent = questionBank.length;
+
+    tbody.innerHTML = '';
+    questionBank.forEach((item, idx) => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-800/60';
+        const badgeColor = item.answer === 'ใช่'
+            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+            : 'bg-rose-500/20 text-rose-300 border-rose-500/40';
+
+        tr.innerHTML = `
+            <td class="p-2.5 font-bold text-slate-400">${idx + 1}</td>
+            <td class="p-2.5 text-white font-medium">${item.question}</td>
+            <td class="p-2.5 text-center">
+                <span class="px-2.5 py-0.5 rounded-full text-xs font-bold border ${badgeColor}">${item.answer}</span>
+            </td>
+            <td class="p-2.5 text-slate-300">${item.explanation}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+    renderQuestionsPreviewTable();
+});
