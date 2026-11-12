@@ -32,24 +32,21 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0f172a}
 
 <div id="ui-layer" class="flex flex-col justify-between p-3 sm:p-6">
 
-<header id="hud-header" class="hidden w-full max-w-7xl mx-auto pr-14 sm:pr-28 flex flex-wrap items-center justify-between gap-2 z-30">
-<div class="glass-panel px-4 py-2 rounded-2xl flex items-center gap-3 border-l-4 border-l-blue-400">
+<header id="hud-header" class="hidden w-full max-w-7xl mx-auto pr-14 sm:pr-28 flex flex-wrap items-start justify-between gap-2 z-30">
+<div class="flex-1 flex justify-start"><div class="glass-panel px-4 py-2 rounded-2xl flex items-center gap-3 border-l-4 border-l-blue-400">
 <span id="p1-badge" class="bg-blue-600 text-xs sm:text-sm font-bold px-2.5 py-1 rounded-lg">คะแนน</span>
-<div class="text-sm sm:text-xl font-extrabold flex gap-3"><span class="text-emerald-400">ถูก = <span id="p1-correct" class="text-white">0</span></span><span class="text-rose-400">ผิด = <span id="p1-wrong" class="text-white">0</span></span></div></div>
-
-<div class="glass-panel px-5 py-2 rounded-2xl flex items-center gap-2 border border-amber-400/40">
+<div class="text-sm sm:text-xl font-extrabold flex gap-3"><span class="text-emerald-400">ถูก = <span id="p1-correct" class="text-white">0</span></span><span class="text-rose-400">ผิด = <span id="p1-wrong" class="text-white">0</span></span></div></div></div>
+<div class="flex flex-col items-center gap-2"><div class="glass-panel px-5 py-2 rounded-2xl flex items-center gap-2 border border-amber-400/40">
 <span class="text-xl">⏱️</span><span id="timer-display" class="text-2xl sm:text-3xl font-black text-amber-300">60</span><span class="text-xs text-amber-100">วินาที</span></div>
-
-<div id="p2-score-panel" class="hidden glass-panel px-4 py-2 rounded-2xl flex items-center gap-3 border-l-4 border-l-cyan-400">
-<span class="bg-cyan-600 text-xs sm:text-sm font-bold px-2.5 py-1 rounded-lg">ผู้เล่น 2 (ขวา)</span>
-<div class="text-sm sm:text-xl font-extrabold flex gap-3"><span class="text-emerald-400">ถูก = <span id="p2-correct" class="text-white">0</span></span><span class="text-rose-400">ผิด = <span id="p2-wrong" class="text-white">0</span></span></div></div>
-
-<div class="flex flex-wrap items-center gap-2">
+<div class="flex flex-wrap items-center justify-center gap-2">
 <div class="glass-panel px-3 py-2 rounded-xl text-xs sm:text-sm flex items-center gap-2"><span id="hand-dot" class="w-3 h-3 rounded-full bg-amber-400"></span><span id="hand-text">กำลังหามือ...</span></div>
 <button data-hud-action="pause" onclick="togglePauseGame()" class="ar-hud-target glass-panel px-3.5 py-2 rounded-xl border border-amber-400/50 text-amber-200 font-bold text-xs sm:text-sm"><span id="pause-icon">⏸️</span> <span id="pause-text">หยุด</span></button>
 <button data-hud-action="home" onclick="goToHomeScreen()" class="ar-hud-target glass-panel px-3.5 py-2 rounded-xl border border-blue-400/50 text-blue-200 font-bold text-xs sm:text-sm">🏠 หน้าหลัก</button>
 <button onclick="openSettingsModal()" class="glass-panel p-2 rounded-xl border border-slate-600" title="ตั้งค่า">⚙️</button>
-</div>
+</div></div>
+<div class="flex-1 flex justify-end"><div id="p2-score-panel" class="hidden glass-panel px-4 py-2 rounded-2xl flex items-center gap-3 border-l-4 border-l-cyan-400">
+<span class="bg-cyan-600 text-xs sm:text-sm font-bold px-2.5 py-1 rounded-lg">ผู้เล่น 2 (ขวา)</span>
+<div class="text-sm sm:text-xl font-extrabold flex gap-3"><span class="text-emerald-400">ถูก = <span id="p2-correct" class="text-white">0</span></span><span class="text-rose-400">ผิด = <span id="p2-wrong" class="text-white">0</span></span></div></div></div>
 </header>
 
 <div id="pause-modal" class="hidden fixed inset-0 z-40 bg-slate-950/80 flex items-center justify-center p-4">
